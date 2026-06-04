@@ -1,13 +1,14 @@
 {
   "name": "ararahq-code",
-  "version": "0.1.13",
+  "version": "0.1.14",
   "type": "module",
   "bin": {
     "arara": "./src/index.ts"
   },
   "scripts": {
     "start": "bun run src/index.ts",
-    "build": "bun build src/index.ts --compile --outfile arara"
+    "build": "bun build src/index.ts --compile --outfile arara",
+    "eval": "bun run eval/rodar.ts"
   },
   "dependencies": {
     "@ai-sdk/openai-compatible": "^2.0.48",

@@ -125,13 +125,25 @@ src/
 
 ---
 
+## Avaliação (eval)
+
+Conjunto de tarefas FIXO com gabarito — pra "melhorou" virar número, não sensação. Dois níveis:
+
+```bash
+bun run eval               # Tier 1 (grátis): roteamento + seleção de contexto (sem modelo)
+bun run eval -- --full     # Tier 2 (pago): diagnóstico real — cravou? custo? tempo? (precisa de key)
+bun run eval -- --salvar   # grava o resultado atual como placar-base (referência)
+```
+
+Toda mudança no agente: roda o conjunto, compara com `eval/placar-base.json`. O Tier 1 mede a maior alavanca (seleção de contexto) sem gastar key — e separa "errou o contexto" de "errou o raciocínio". Casos de diagnóstico apontam pra um **fixture congelado** (`eval/fixtures/`) pra serem reproduzíveis mesmo depois do bug ser corrigido no código vivo. Adicione os seus 15-20 casos reais em `eval/casos.ts`.
+
 ## Versionamento
 
 - Versão em `jade.version` + `package.json`, **patch por patch** (`0.1.0 -> 0.1.1 -> ... -> 0.1.10 -> 0.2.0`).
 - **Toda mudança de versão é commitada e enviada pra `main`.**
 - Commits: uma linha, `tipo(escopo): descrição`, presente do indicativo, sem body.
 
-Versão atual: **0.1.13**.
+Versão atual: **0.1.14**.
 
 ---
 

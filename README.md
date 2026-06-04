@@ -131,7 +131,7 @@ src/
 - **Toda mudança de versão é commitada e enviada pra `main`.**
 - Commits: uma linha, `tipo(escopo): descrição`, presente do indicativo, sem body.
 
-Versão atual: **0.1.11**.
+Versão atual: **0.1.12**.
 
 ---
 

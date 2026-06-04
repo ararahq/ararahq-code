@@ -356,7 +356,7 @@ async function diagnosticarEMastigar(
   logInterno(`diagnostico cravou modelo=${diag.modelo} rodadas=${diag.rodadas}`)
   definirEscopo(escopoDoDiagnostico(diag.texto))
   logInterno(`escopo=[${[...escopoAtual().arquivos].join(", ")}]`)
-  const tarefa = `A causa já foi diagnosticada abaixo. Aplique a correção SOMENTE nos arquivos citados na causa: leia o arquivo citado, faça a edição exata com editar_arquivo e rode o build pra verificar. NÃO mude outros pontos com o mesmo padrão — eles podem ser intencionais. Se já estiver correto, confirme.\n\n${diag.texto}`
+  const tarefa = `A causa já foi diagnosticada abaixo. Aplique a correção SOMENTE nos arquivos citados na causa: leia o arquivo citado, faça a edição exata com editar_arquivo e rode o build pra verificar. NÃO gaste ações conferindo imports, assinaturas ou se uma classe/método existe — o build verifica isso; vá direto edição -> build. NÃO mude outros pontos com o mesmo padrão (podem ser intencionais). NÃO repita estas instruções na tua resposta; aja sobre elas. Se já estiver correto, confirme.\n\n${diag.texto}`
   return { ok: true, tarefa, texto: diag.texto, modelos: diag.modelosUsados, tokens, custoUSD: diag.custoUSD, ms: Date.now() - inicio }
 }
 

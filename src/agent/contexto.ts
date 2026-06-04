@@ -1,5 +1,6 @@
 import { indexar, type Indice, buscarPrecedente, type Precedente } from "../conhecimento"
 import type { Simbolo } from "../conhecimento"
+import { listarFontes, type ArquivoFonte } from "../conhecimento/walk"
 import { extrairEntidades, ehGenerico, linguagensCitadas } from "../engine/marques"
 
 // Camada 2 — Montagem de Contexto (determinística, via índice da Camada 1).
@@ -344,6 +345,81 @@ export type PacoteContexto = {
   precedentes: Precedente[]
   texto: string
   forte: boolean
+  // Material veio da SUPERFÍCIE ESCOPADA (SDK pequeno inteiro), não de um par preciso. O gate de
+  // escalada usa isso: superfície é contexto BOM (pode escalar 1x), mas não é o par (sweet spot).
+  escopado: boolean
+}
+
+const MAX_ARQ_SUPERFICIE = 24
+const MAX_LINHAS_SUPERFICIE = 90
+const MAX_CHARS_SUPERFICIE = 13_000
+
+// Arquivos que mais provavelmente contêm o bug de um SDK (config/cliente/http/base/entrypoint) vêm
+// primeiro na superfície; testes por último. Resolve os bugs "scan-de-literal" (base_url, import morto).
+const RE_ARQUIVO_PRIORITARIO = /\b(config|settings|client|http|base|index|resources?|api|connection|conn|setup|constants|main)\b|__init__/i
+const RE_ARQUIVO_TESTE = /test|spec|__tests__|\.test\.|\.spec\./i
+
+function prioridadeArquivo(caminho: string): number {
+  const base = caminho.split("/").pop() ?? ""
+  let p = 0
+  if (RE_ARQUIVO_PRIORITARIO.test(base)) p += 10
+  if (RE_ARQUIVO_TESTE.test(caminho)) p -= 20
+  return p
+}
+
+function repoDe(caminho: string): string {
+  const i = caminho.indexOf("/")
+  return i < 0 ? caminho : caminho.slice(0, i)
+}
+
+/**
+ * Superfície escopada: o sintoma cita uma linguagem mas o índice não casou um ponto preciso (bug de
+ * literal/config sem símbolo que case o sintoma). Em vez de devolver lixo, entrega o SDK PEQUENO
+ * INTEIRO daquela linguagem pro modelo escanear — "ver todos os arquivos da pasta", não só os que
+ * casam por nome. Acha o subtree (repo com mais arquivos da linguagem, preferindo nome que a cita),
+ * lê os fontes (capados, prioritários primeiro, testes por último). null se não houver nada.
+ */
+async function superficieEscopada(
+  raiz: string,
+  lang: string,
+  exts: string[],
+): Promise<{ texto: string; arquivos: string[] } | null> {
+  const naLingua = (await listarFontes(raiz)).filter((f) => exts.some((e) => f.caminho.endsWith(e)))
+  if (!naLingua.length) return null
+
+  const porRepo = new Map<string, ArquivoFonte[]>()
+  for (const f of naLingua) {
+    const r = repoDe(f.caminho)
+    porRepo.set(r, [...(porRepo.get(r) ?? []), f])
+  }
+  const [, arquivosRepo] = [...porRepo.entries()].sort(
+    (a, b) =>
+      (b[0].toLowerCase().includes(lang) ? 1 : 0) - (a[0].toLowerCase().includes(lang) ? 1 : 0) ||
+      b[1].length - a[1].length,
+  )[0]
+
+  const ordenados = arquivosRepo
+    .sort((a, b) => prioridadeArquivo(b.caminho) - prioridadeArquivo(a.caminho) || a.bytes - b.bytes)
+    .slice(0, MAX_ARQ_SUPERFICIE)
+
+  const blocos: string[] = []
+  const arquivos: string[] = []
+  let chars = 0
+  for (const f of ordenados) {
+    if (chars >= MAX_CHARS_SUPERFICIE) break
+    try {
+      const linhas = (await Bun.file(`${raiz}/${f.caminho}`).text()).split("\n").slice(0, MAX_LINHAS_SUPERFICIE)
+      const numeradas = linhas.map((l, i) => `${i + 1}\t${l}`).join("\n")
+      blocos.push(`### ${f.caminho}\n${numeradas}`)
+      arquivos.push(f.caminho)
+      chars += numeradas.length
+    } catch {
+      // arquivo ilegível: ignora
+    }
+  }
+  if (!blocos.length) return null
+  const texto = `CÓDIGO DO SDK DE ${lang.toUpperCase()} (o ponto do sintoma ESTÁ aqui dentro — escaneie e aponte arquivo:linha):\n\n${blocos.join("\n\n")}`
+  return { texto, arquivos }
 }
 
 /**
@@ -412,7 +488,8 @@ export async function montarPacote(raiz: string, input: string): Promise<PacoteC
   // Escopo por linguagem: se o sintoma cita um ecossistema ("a lib de python", "no php"), restringe a
   // busca aos arquivos daquele ecossistema. Usa só a PRIMEIRA linguagem citada (o sujeito da queixa) —
   // num contraste "python quebra, node funciona", escopar pro node também puxaria de volta o lixo .ts.
-  const exts = linguagensCitadas(input)[0]?.exts ?? []
+  const langs = linguagensCitadas(input)
+  const exts = langs[0]?.exts ?? []
   const noEscopo = (arquivo: string) => exts.length === 0 || exts.some((e) => arquivo.endsWith(e))
 
   const sementes = resolverSementes(indice, entidades).filter((s) => noEscopo(s.arquivo))
@@ -427,6 +504,26 @@ export async function montarPacote(raiz: string, input: string): Promise<PacoteC
 
   const chamadas = chamadasDeOperacao(indice, foco)
   const pares = parearPorGrafo(chamadas, entidades)
+
+  // Sem par preciso, mas o sintoma cita uma linguagem? Entrega o SDK pequeno INTEIRO (superfície
+  // escopada) pro modelo escanear — resolve o bug de literal/config que não casa símbolo por nome
+  // (base_url errado, import morto). É contexto bom (forte) mas não é o par (escopado).
+  if (pares.length === 0 && langs.length > 0) {
+    const sup = await superficieEscopada(raiz, langs[0].lang, exts)
+    if (sup) {
+      return {
+        entidades,
+        simbolosCasados: sementes.length,
+        arquivosFoco: sup.arquivos,
+        pares: [],
+        trechos: [],
+        precedentes,
+        texto: sup.texto,
+        forte: true,
+        escopado: true,
+      }
+    }
+  }
 
   const rotulo = entidades.find((e) => TERMOS_SHARED.includes(e)) ?? entidades[0] ?? "a entidade"
   const mapaSimbolos = simbolosDoMapa(indice, sementes, pares, foco)
@@ -453,6 +550,7 @@ export async function montarPacote(raiz: string, input: string): Promise<PacoteC
     precedentes,
     texto,
     forte,
+    escopado: false,
   }
 }
 
@@ -467,5 +565,6 @@ function pacoteFraco(entidades: string[], precedentes: Precedente[]): PacoteCont
     precedentes,
     texto,
     forte: false,
+    escopado: false,
   }
 }

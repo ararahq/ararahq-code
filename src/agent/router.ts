@@ -104,10 +104,12 @@ export function deveReclassificarPraDiagnostico(modo: Modo, houveEdicao: boolean
   return respostaHedge(resposta)
 }
 
-// Cadeia de fallback INVISÍVEL do diagnóstico (M3, D6): Gemini -> GPT-5.5 -> Opus.
-// Quando o modelo não crava (sem arquivo:linha ou linguagem hedge), o MESMO material é
-// repassado pro próximo, uma passada cada. O usuário nunca vê a troca — só "Jade · diagnóstico".
+// Cadeia de fallback INVISÍVEL do diagnóstico (M3, D6). COMEÇA BARATO: deepseek-v3.2 ($0.28/$0.42).
+// Bug simples com contexto bom o barato crava — sem nascer num modelo caro. Só escala (gemini ->
+// gpt-5.5 -> opus) quando trava E o material justifica (par preciso / superfície escopada). O quanto
+// escala é decidido pela QUALIDADE do material no diagnosticarComFallback, não aqui. Usuário vê só "Jade".
 export const CADEIA_DIAGNOSTICO: string[] = [
+  MODELOS.execucao,
   MODELOS.diagnostico,
   "openai/gpt-5.5",
   "anthropic/claude-opus-4.7",

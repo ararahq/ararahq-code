@@ -394,6 +394,9 @@ export type Material = {
   dossie: string
   texto: string
   fonte: "indice" | "grep"
+  // veio da superfície escopada (SDK pequeno inteiro): contexto bom, mas sem par. O gate de escalada
+  // permite 1 degrau aqui (barato -> 1 forte), não a cadeia toda (que é só pro par preciso).
+  escopado: boolean
 }
 export type ResultadoDiagnostico = {
   texto: string
@@ -426,7 +429,7 @@ export async function reunirMaterial(input: string): Promise<Material> {
       a: { metodo: p.a.metodo, familia: p.familia, linha: p.a.linha, trecho: `${p.a.chamada}()`, alvo: p.a.chamada, arquivo: p.a.arquivo },
       b: { metodo: p.b.metodo, familia: p.familia, linha: p.b.linha, trecho: `${p.b.chamada}()`, alvo: p.b.chamada, arquivo: p.b.arquivo },
     }))
-    return { entidades: pacote.entidades, hits: pacote.simbolosCasados, pares, dossie: pacote.texto, texto: pacote.texto, fonte: "indice" }
+    return { entidades: pacote.entidades, hits: pacote.simbolosCasados, pares, dossie: pacote.texto, texto: pacote.texto, fonte: "indice", escopado: pacote.escopado }
   }
   return reunirMaterialGrep(input)
 }
@@ -439,7 +442,7 @@ async function reunirMaterialGrep(input: string): Promise<Material> {
   const [dossie, pares] = await Promise.all([lerDossie(entidades, exts), montarPares(entidades, ranking)])
   const blocoPares = renderPares(pares, entidades)
   const texto = blocoPares ? `${blocoPares}\n\n--- código completo dos pontos ---\n${dossie}` : dossie
-  return { entidades, hits: ranking.reduce((s, a) => s + a.hits, 0), pares, dossie, texto, fonte: "grep" }
+  return { entidades, hits: ranking.reduce((s, a) => s + a.hits, 0), pares, dossie, texto, fonte: "grep", escopado: false }
 }
 
 /**
@@ -453,6 +456,7 @@ export async function diagnosticar(
   onMapa: (n: number) => void,
   signal?: AbortSignal,
   materialPronto?: Material,
+  effort: Esforco = "high",
 ): Promise<ResultadoDiagnostico> {
   const material = materialPronto ?? (await reunirMaterial(input))
   onMapa(material.hits)
@@ -463,9 +467,12 @@ export async function diagnosticar(
   let texto = ""
   let rodadas = 0
 
-  for (let i = 1; i <= MAX_RODADAS_RACIOCINIO; i++) {
+  // Superfície escopada já tem o SDK INTEIRO no contexto — pedir "falta arquivo" é ruído e re-roda à
+  // toa (foi o que deu timeout). Uma rodada só. Material por índice/grep mantém o loop de completar.
+  const maxRodadas = material.escopado ? 1 : MAX_RODADAS_RACIOCINIO
+  for (let i = 1; i <= maxRodadas; i++) {
     rodadas = i
-    const r = await raciocinarDiagnostico(input, dossie, model, signal)
+    const r = await raciocinarDiagnostico(input, dossie, model, signal, effort)
     inTok += r.inTok
     outTok += r.outTok
     texto = r.texto
@@ -507,10 +514,19 @@ export async function diagnosticarComFallback(
   let modelo = cadeia[0] ?? ""
   let primeiroMapa = true
 
-  for (const slug of cadeia) {
+  // COMEÇA BARATO (cadeia[0] = deepseek) e SÓ escala no sweet spot da arquitetura: a COMPARAÇÃO
+  // PAREADA precisa, onde mais raciocínio (até o opus) de fato compensa. Tudo o mais — superfície
+  // escopada (SDK pequeno) ou grep — roda 1 passada barata e devolve: escalar modelo aqui não
+  // LOCALIZA melhor, só custa caro e arrisca timeout (cada passada é lenta). "Sem escalar no simples."
+  const maxModelos = material.pares.length > 0 ? cadeia.length : 1
+  for (let i = 0; i < cadeia.length && i < maxModelos; i++) {
+    const slug = cadeia[i]
     modelo = slug
     modelosUsados.push(slug)
     onTroca(slug)
+    // O esforço escala com o modelo: o BARATO (1ª passada) usa esforço MÉDIO — rápido mas confiável o
+    // bastante pra cravar bug simples sem ser cara-ou-coroa; quando ESCALA pro forte, pensa fundo (high).
+    const effort: Esforco = i === 0 ? "medium" : "high"
     const r = await diagnosticar(
       input,
       criarModel(slug),
@@ -522,6 +538,7 @@ export async function diagnosticarComFallback(
       },
       signal,
       material,
+      effort,
     )
     inTok += r.inTok
     outTok += r.outTok
@@ -530,11 +547,6 @@ export async function diagnosticarComFallback(
     ultimo = r
     if (signal?.aborted) break
     if (!detectouHedge(r.texto)) break
-    // Fail-fast (anti-400s/timeout): só escala pra um modelo MAIS CARO quando há COMPARAÇÃO PAREADA
-    // precisa — o ponto forte da arquitetura, onde mais raciocínio de fato compensa (foi o que fez o
-    // bug dos números cravar). Sem par (grep, ou superfície escopada sem divergência clara), uma
-    // passada e devolve honesto: mais modelo não LOCALIZA melhor, só custa caro e arrisca timeout.
-    if (material.pares.length === 0) break
   }
 
   return {
@@ -555,17 +567,20 @@ export async function diagnosticarComFallback(
  * Cospe o diagnóstico mastigado (causa raiz + correção) que o modelo rápido executa na fase 2.
  * Tira o raciocínio caro do loop agêntico — é uma pensada só, não seis.
  */
+export type Esforco = "low" | "medium" | "high"
+
 export async function raciocinarDiagnostico(
   input: string,
   dossie: string,
   model: Parameters<typeof generateText>[0]["model"],
   signal?: AbortSignal,
+  effort: Esforco = "high",
 ): Promise<{ texto: string; inTok: number; outTok: number }> {
   const r = await generateText({
     model,
     system: SISTEMA_RACIOCINIO,
     prompt: `SINTOMA:\n${input}\n\nTRECHOS DOS PONTOS QUE TOCAM NO SINTOMA:\n${dossie}\n\nCompare os caminhos e diagnostique.`,
-    providerOptions: { openrouter: { reasoning: { effort: "high" } } },
+    providerOptions: { openrouter: { reasoning: { effort } } },
     temperature: 0.2,
     abortSignal: signal,
   })

@@ -1,5 +1,5 @@
 import { generateText } from "ai"
-import { extrairEntidades, ehGenerico } from "../engine/marques"
+import { extrairEntidades, ehGenerico, linguagensCitadas } from "../engine/marques"
 import { comandoBusca, comandoContagem, rodar } from "../tools"
 import { montarPacote } from "./contexto"
 
@@ -72,16 +72,22 @@ const MAX_RODADAS_RACIOCINIO = 3
 
 export type ArquivoRank = { arquivo: string; hits: number }
 
-/** Ranqueia os arquivos por contagem de hits (mais matches = mais central ao sintoma). */
-export async function arquivosRelevantes(entidades: string[]): Promise<ArquivoRank[]> {
+/**
+ * Ranqueia os arquivos por contagem de hits (mais matches = mais central ao sintoma). Quando o
+ * sintoma cita uma linguagem, FILTRA pros arquivos daquele ecossistema — sem isso, num monorepo
+ * poliglota a prosa casa centenas de arquivos e o dossiê explode (a passada do modelo dá timeout).
+ */
+export async function arquivosRelevantes(entidades: string[], exts: string[] = []): Promise<ArquivoRank[]> {
   const query = queryDe(entidades)
   if (!query) return []
   const { saida } = await rodar(comandoContagem(query), undefined, TIMEOUT_BUSCA)
+  const noEscopo = (arquivo: string) => exts.length === 0 || exts.some((e) => arquivo.endsWith(e))
   return saida
     .split("\n")
     .map((l) => l.match(/^(.+):(\d+)$/))
     .filter((m): m is RegExpMatchArray => Boolean(m))
     .map((m) => ({ arquivo: m[1].replace(/^\.\//, ""), hits: Number(m[2]) }))
+    .filter((a) => noEscopo(a.arquivo))
     .slice(0, MAX_FICHEIROS)
 }
 
@@ -90,8 +96,8 @@ export async function arquivosRelevantes(entidades: string[]): Promise<ArquivoRa
  * com ruído excluído). Determinístico e rápido — dá ao raciocínio o material certo pra comparar,
  * em vez de uma busca aberta. Antes pegava os 4 primeiros por ordem do grep e vinha só frontend.
  */
-export async function lerDossie(entidades: string[]): Promise<string> {
-  const arquivos = await arquivosRelevantes(entidades)
+export async function lerDossie(entidades: string[], exts: string[] = []): Promise<string> {
+  const arquivos = await arquivosRelevantes(entidades, exts)
   const partes: string[] = []
   for (const { arquivo } of arquivos) {
     try {
@@ -428,8 +434,9 @@ export async function reunirMaterial(input: string): Promise<Material> {
 /** Gather LEGADO por grep (fallback quando o índice resolve pouco). Preserva o caminho v0.1.6. */
 async function reunirMaterialGrep(input: string): Promise<Material> {
   const entidades = extrairEntidades(input)
-  const ranking = await arquivosRelevantes(entidades)
-  const [dossie, pares] = await Promise.all([lerDossie(entidades), montarPares(entidades, ranking)])
+  const exts = linguagensCitadas(input)[0]?.exts ?? []
+  const ranking = await arquivosRelevantes(entidades, exts)
+  const [dossie, pares] = await Promise.all([lerDossie(entidades, exts), montarPares(entidades, ranking)])
   const blocoPares = renderPares(pares, entidades)
   const texto = blocoPares ? `${blocoPares}\n\n--- código completo dos pontos ---\n${dossie}` : dossie
   return { entidades, hits: ranking.reduce((s, a) => s + a.hits, 0), pares, dossie, texto, fonte: "grep" }
@@ -523,6 +530,11 @@ export async function diagnosticarComFallback(
     ultimo = r
     if (signal?.aborted) break
     if (!detectouHedge(r.texto)) break
+    // Fail-fast (anti-400s/timeout): só escala pra um modelo MAIS CARO quando há COMPARAÇÃO PAREADA
+    // precisa — o ponto forte da arquitetura, onde mais raciocínio de fato compensa (foi o que fez o
+    // bug dos números cravar). Sem par (grep, ou superfície escopada sem divergência clara), uma
+    // passada e devolve honesto: mais modelo não LOCALIZA melhor, só custa caro e arrisca timeout.
+    if (material.pares.length === 0) break
   }
 
   return {

@@ -154,7 +154,7 @@ Toda mudança no agente: roda o conjunto, compara com `eval/placar-base.json`. O
 - **Toda mudança de versão é commitada e enviada pra `main`.**
 - Commits: uma linha, `tipo(escopo): descrição`, presente do indicativo, sem body.
 
-Versão atual: **0.1.15**.
+Versão atual: **0.1.16**.
 
 ---
 

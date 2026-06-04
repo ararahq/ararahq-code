@@ -8,6 +8,10 @@ const STOPWORDS = new Set([
   "qual", "onde", "quando", "porque", "por que", "porquê", "causa", "acha",
   "pra", "isso", "esse", "essa", "mas", "ou", "nao", "não", "sim", "ja", "já",
   "mais", "menos", "muito", "pouco", "todo", "toda", "todos", "todas",
+  // prosa conversacional de ticket de suporte: vira termo de busca e casa lixo (errors.ts, etc.)
+  "instalei", "instalar", "instala", "funciona", "funcionar", "funcionando", "voce", "voces",
+  "você", "vocês", "nada", "fala", "falam", "falou", "falar", "usa", "usar", "usando", "lib",
+  "libs", "jura", "reclama", "reclamando", "reclamou", "coisa", "coisas", "negocio", "negócio",
 ])
 
 const SINAIS_ALTA = [
@@ -227,4 +231,35 @@ const RE_DUVIDA =
 export function respostaHedge(resposta: string): boolean {
   if (RE_ACAO_FEITA.test(resposta)) return false
   return RE_DUVIDA.test(resposta)
+}
+
+// Linguagem/ecossistema citado no sintoma ("a lib de python", "no php", "cliente node"). É um
+// LOCALIZADOR forte num monorepo poliglota: escopa a busca pros arquivos daquele ecossistema, em vez
+// de casar prosa espalhada por todos os repos. Cada entrada: termos que disparam + extensões do escopo.
+const LINGUAGENS: { lang: string; termos: string[]; exts: string[] }[] = [
+  { lang: "python", termos: ["python", "pydantic", "pip", "django", "flask"], exts: [".py"] },
+  { lang: "php", termos: ["php", "composer", "laravel"], exts: [".php"] },
+  { lang: "node", termos: ["node", "nodejs", "npm", "javascript", "typescript"], exts: [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"] },
+  { lang: "java", termos: ["java", "kotlin", "gradle", "maven", "spring"], exts: [".java", ".kt", ".kts"] },
+  { lang: "ruby", termos: ["ruby", "rails", "bundler"], exts: [".rb"] },
+  { lang: "go", termos: ["golang"], exts: [".go"] },
+]
+
+/**
+ * Linguagens citadas, ORDENADAS pela primeira aparição no texto. A primeira costuma ser o SUJEITO da
+ * reclamação ("a lib de PYTHON não funciona, no node funciona") — quem escopa usa a primeira, não
+ * todas, senão num contraste ("X quebra, Y funciona") puxa o escopo do Y (o que funciona) junto. Pura.
+ */
+export function linguagensCitadas(input: string): { lang: string; exts: string[] }[] {
+  const low = input.toLowerCase()
+  const achados: { lang: string; exts: string[]; pos: number }[] = []
+  for (const l of LINGUAGENS) {
+    let min = Infinity
+    for (const t of l.termos) {
+      const m = low.search(new RegExp(`\\b${t}\\b`))
+      if (m >= 0 && m < min) min = m
+    }
+    if (min < Infinity) achados.push({ lang: l.lang, exts: l.exts, pos: min })
+  }
+  return achados.sort((a, b) => a.pos - b.pos).map(({ lang, exts }) => ({ lang, exts }))
 }

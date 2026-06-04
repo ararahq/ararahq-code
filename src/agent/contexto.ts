@@ -1,6 +1,6 @@
 import { indexar, type Indice, buscarPrecedente, type Precedente } from "../conhecimento"
 import type { Simbolo } from "../conhecimento"
-import { extrairEntidades, ehGenerico } from "../engine/marques"
+import { extrairEntidades, ehGenerico, linguagensCitadas } from "../engine/marques"
 
 // Camada 2 — Montagem de Contexto (determinística, via índice da Camada 1).
 //
@@ -409,11 +409,18 @@ export async function montarPacote(raiz: string, input: string): Promise<PacoteC
     return pacoteFraco(entidades, precedentes)
   }
 
-  const sementes = resolverSementes(indice, entidades)
+  // Escopo por linguagem: se o sintoma cita um ecossistema ("a lib de python", "no php"), restringe a
+  // busca aos arquivos daquele ecossistema. Usa só a PRIMEIRA linguagem citada (o sujeito da queixa) —
+  // num contraste "python quebra, node funciona", escopar pro node também puxaria de volta o lixo .ts.
+  const exts = linguagensCitadas(input)[0]?.exts ?? []
+  const noEscopo = (arquivo: string) => exts.length === 0 || exts.some((e) => arquivo.endsWith(e))
+
+  const sementes = resolverSementes(indice, entidades).filter((s) => noEscopo(s.arquivo))
   // Foco rankeado por relevância de domínio (service backend + operação no grafo > telas de UI que
   // só citam a entidade). Cap pra não pagar custo num monorepo onde "shared" aparece em dezenas de
   // lugares. Sem isso, o arquivo-mãe afunda sob ruído de frontend e o par certo nunca é montado.
   const focoLista = rankearFoco(indice, entidades)
+    .filter((c) => noEscopo(c.arquivo))
     .slice(0, MAX_ARQUIVOS_FOCO)
     .map((c) => c.arquivo)
   const foco = new Set(focoLista)

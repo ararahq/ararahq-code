@@ -23,6 +23,7 @@ import { carregarContexto } from "../context/projeto"
 import { carregarIndice } from "../conhecimento"
 import {
   escopoDoDiagnostico,
+  escopoDeArquivos,
   definirEscopo,
   escopoAtual,
   arquivosEditados,
@@ -36,6 +37,13 @@ import {
   INSTRUCAO_TRAJETORIA_LONGA,
   contornoAmbiente,
 } from "./camada4"
+import {
+  decompor,
+  valeOrquestrar,
+  promptDoSub,
+  relatorioProgresso,
+  type SubFeito,
+} from "./maestro"
 import { ui } from "../terminal/ui"
 
 type Msg = { role: "user" | "assistant"; content: string }
@@ -360,6 +368,143 @@ async function diagnosticarEMastigar(
   return { ok: true, tarefa, texto: diag.texto, modelos: diag.modelosUsados, tokens, custoUSD: diag.custoUSD, ms: Date.now() - inicio }
 }
 
+/** Complexo = o roteador escolheu a marcha de loop longo (tamanho/escopo grande). */
+function ehComplexo(decisao: ReturnType<typeof rotear>): boolean {
+  return decisao.modelo === MODELOS.loopLongo
+}
+
+/**
+ * Maestro — orquestração de tarefa complexa. Decompõe (modelo forte, 1 passada) em sub-objetivos e
+ * roda CADA UM na máquina provada (diagnóstico opcional + execução + portão de build), com escopo e
+ * orçamento de passos próprios, fazendo checkpoint entre eles. Para honesto com o progresso salvo se
+ * um sub-objetivo travar. Devolve true se tratou a tarefa; false se a decomposição foi atômica/falhou
+ * (aí o chamador segue o caminho normal de 1 passada). O usuário vê só "Jade" + o plano + o progresso.
+ */
+async function orquestrarComplexo(
+  input: string,
+  openrouter: ReturnType<typeof provedor>,
+  ctx: { completo: string; resumo: string },
+): Promise<boolean> {
+  const inicio = Date.now()
+  const acP = new AbortController()
+  _abort = acP
+  ui.spinnerStart("Jade planejando")
+  const dec = await decompor(input, openrouter(MODELOS.diagnostico) as Modelo)
+  ui.spinnerStop()
+  _abort = null
+  if (acP.signal.aborted) {
+    finalizarAbort()
+    return true
+  }
+  if (!dec || !valeOrquestrar(dec.plano)) return false // atômico/falhou -> caminho normal de 1 passada
+
+  const plano = dec.plano
+  logInterno(`maestro decompôs em ${plano.subobjetivos.length} sub-objetivos`)
+  ui.plano(plano.subobjetivos.map((s) => `${s.descricao}${s.arquivosAlvo.length ? ` (${s.arquivosAlvo.join(", ")})` : ""}`))
+
+  let tokensTotal = dec.inTok + dec.outTok
+  let custoTotal = custoUSD(MODELOS.diagnostico, dec.inTok, dec.outTok)
+  const feitos: SubFeito[] = []
+  const passoRef = { atual: 0 }
+  const sistema = montarSistema(ctx.completo, "", "")
+  historico.push({ role: "user", content: input })
+
+  const finalizar = (rel: string) => {
+    ui.linhaBranca()
+    ui.resposta(rel)
+    ui.linhaBranca()
+    historico.push({ role: "assistant", content: rel })
+    ui.metricas(tokensTotal, custoTotal, Date.now() - inicio)
+    return registrarTarefa({
+      modo: "loop-longo",
+      modelo: `${MODELOS.diagnostico}(plano)→${MODELOS.execucao}`,
+      thinking: true,
+      tokens: tokensTotal,
+      custoUSD: custoTotal,
+      ms: Date.now() - inicio,
+    })
+  }
+
+  for (let i = 0; i < plano.subobjetivos.length; i++) {
+    const sub = plano.subobjetivos[i]
+    ui.jade(`sub-objetivo ${i + 1}/${plano.subobjetivos.length}`)
+    definirEscopo(escopoDeArquivos(sub.arquivosAlvo))
+
+    let tarefaSub = promptDoSub(plano, i)
+    if (sub.tipo === "diagnostico") {
+      const d = await diagnosticarEMastigar(sub.descricao, openrouter)
+      if (d.ok) {
+        tokensTotal += d.tokens
+        custoTotal += d.custoUSD
+        tarefaSub = `${tarefaSub}\n\nDIAGNÓSTICO:\n${d.tarefa}`
+      } else if (d.motivo === "abortado") {
+        finalizarAbort()
+        return true
+      }
+    }
+
+    const r = await executarPassada({
+      model: openrouter(MODELOS.execucao) as Modelo,
+      sistema,
+      toolset: ferramentas,
+      plano: [],
+      thinking: false,
+      passoRef,
+      extra: [{ role: "user" as const, content: tarefaSub }],
+    })
+    tokensTotal += r.inTok + r.outTok
+    custoTotal += custoUSD(MODELOS.execucao, r.inTok, r.outTok)
+    if (r.abortado) {
+      finalizarAbort()
+      return true
+    }
+    if (r.erro) {
+      await finalizar(relatorioProgresso(plano, feitos, i, msgErro(r.erro)))
+      return true
+    }
+
+    let gate = await rodarTestGate()
+    if (gate.estado === "vermelho") {
+      const rFix = await executarPassada({
+        model: openrouter(MODELOS.execucao) as Modelo,
+        sistema,
+        toolset: ferramentas,
+        plano: [],
+        thinking: true,
+        passoRef,
+        extra: [
+          ...(r.resposta.trim() ? [{ role: "assistant" as const, content: r.resposta }] : []),
+          { role: "user" as const, content: INSTRUCAO_GATE_VERMELHO },
+        ],
+      })
+      tokensTotal += rFix.inTok + rFix.outTok
+      custoTotal += custoUSD(MODELOS.execucao, rFix.inTok, rFix.outTok)
+      if (rFix.abortado) {
+        finalizarAbort()
+        return true
+      }
+      gate = await rodarTestGate()
+    }
+
+    if (gate.estado === "ambiente") {
+      feitos.push({ descricao: sub.descricao, estado: "sem-gate" })
+      await finalizar(relatorioProgresso(plano, feitos, i, gate.mensagem))
+      return true
+    }
+    if (gate.estado === "vermelho") {
+      feitos.push({ descricao: sub.descricao, estado: "travou" })
+      await finalizar(relatorioProgresso(plano, feitos, i, "o build não fechou verde após o conserto"))
+      return true
+    }
+
+    feitos.push({ descricao: sub.descricao, estado: gate.estado === "verde" ? "verde" : "sem-gate" })
+    historico.push({ role: "assistant", content: `sub-objetivo ${i + 1} concluído: ${sub.descricao}` })
+  }
+
+  await finalizar(relatorioProgresso(plano, feitos, null, ""))
+  return true
+}
+
 export async function processar(input: string) {
   novaRodada()
   const ctx = await carregarContexto()
@@ -391,6 +536,13 @@ export async function processar(input: string) {
   }
 
   ui.jade(rotuloModo(modo))
+
+  // Tarefa COMPLEXA (marcha de loop longo): o Maestro decompõe em sub-objetivos e orquestra cada um
+  // na máquina provada, com checkpoint. Se a decomposição for atômica/falhar, segue o caminho normal.
+  if (!heranca && ehComplexo(decisao)) {
+    const tratado = await orquestrarComplexo(input, openrouter, ctx)
+    if (tratado) return
+  }
 
   // Pipeline de 2 fases. Diagnóstico raciocina UMA vez (caro, fora do loop) e entrega a correção
   // mastigada pro modelo rápido executar — mata a latência do loop com thinking em cada passo.

@@ -43,6 +43,16 @@ As travas que impedem o agente de fazer besteira:
 
 ---
 
+## Tarefas complexas — o Maestro
+
+Problema complexo **não** é um problema maior — é uma **sequência de problemas médios**, e médio a Jade já resolve bem. Quando o roteador classifica a tarefa como loop longo (escopo/tamanho grande), o **Maestro** (`src/agent/maestro.ts`) entra:
+
+1. **Decompõe** a tarefa em sub-objetivos ordenados e verificáveis (1 passada do modelo forte, saída estruturada).
+2. **Executa cada sub-objetivo** na máquina já provada (diagnóstico opcional + edição + portão de build), com **escopo e orçamento de passos próprios**.
+3. **Checkpoint entre eles** — se um sub-objetivo trava, para honesto e devolve o mapa (o que ficou pronto, onde travou, o que falta), pronto pra retomar.
+
+O pulo do gato: cada sub-objetivo é uma execução nova, então **a trava de trajetória (16 passos) reseta por sub-objetivo** — 8 sub-objetivos × 16 passos = 128 passos no total, cada um verificado. Tarefa simples gera UM sub-objetivo e passa direto, sem overhead. **Mesmo agente, do trivial ao complexo** — a diferença é orquestração, não um modelo mais esperto.
+
 ## Jade — as 5 marchas
 
 O usuário **sempre vê só "Jade"**. Por baixo, cada marcha é um modelo diferente, roteado pela Camada 3. A façade é parte do produto.
@@ -99,6 +109,7 @@ src/
 ├─ agent/
 │  ├─ agent.ts         loop agêntico, pipeline de 2 fases, fachada Jade
 │  ├─ router.ts        Camada 3 — roteamento, test-time compute, reclassificação
+│  ├─ maestro.ts       orquestração de tarefa complexa (decompõe -> executa -> verifica -> checkpoint)
 │  ├─ diagnostico.ts   raciocínio single-pass + cadeia de fallback invisível
 │  ├─ contexto.ts      Camada 2 — montagem por comparação pareada
 │  ├─ camada4.ts       scope guard, test-gate, contorno de ambiente, trajetória
@@ -143,7 +154,7 @@ Toda mudança no agente: roda o conjunto, compara com `eval/placar-base.json`. O
 - **Toda mudança de versão é commitada e enviada pra `main`.**
 - Commits: uma linha, `tipo(escopo): descrição`, presente do indicativo, sem body.
 
-Versão atual: **0.1.14**.
+Versão atual: **0.1.15**.
 
 ---
 

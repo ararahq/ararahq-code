@@ -1,6 +1,6 @@
 {
   "name": "ararahq-code",
-  "version": "0.1.14",
+  "version": "0.1.15",
   "type": "module",
   "bin": {
     "arara": "./src/index.ts"

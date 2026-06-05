@@ -618,7 +618,7 @@ function textoIndexadoDoArquivo(a: ArquivoSimbolos): string {
  * perfil de frequência de cada arquivo. É o caminho que acha o arquivo quando o nome do símbolo NÃO
  * casa a palavra do leigo ("recarga/saldo" -> addCredit). Zero token. Penaliza ruído (UI/test/gen).
  */
-function rankearPorTermos(indice: Indice, queryTokens: string[]): { arquivo: string; score: number }[] {
+function rankearPorTermos(indice: Indice, input: string): { arquivo: string; score: number }[] {
   const vocab = new Set<string>()
   const perfis = indice.simbolos.map((a) => {
     // Perfil do CONTEÚDO (indexado na Camada 1) — pega constante/config/valor que o nome de símbolo
@@ -628,7 +628,11 @@ function rankearPorTermos(indice: Indice, queryTokens: string[]): { arquivo: str
     for (const k of perfil.keys()) vocab.add(k)
     return { arquivo: a.arquivo, perfil }
   })
-  const q = expandirDominio(queryTokens, vocab).filter((t) => t.length >= MIN_TOKEN_ESCOPO)
+  // Recall: usa os termos COMPLETOS do sintoma (perfilTermos), não a lista podada de entidades — que
+  // joga "crédito" fora como genérico e deixa o desabafo do leigo crowdar os termos úteis. Soma os
+  // sinônimos PT->EN das entidades, expande pela ponte de domínio e aterra no vocab real do projeto.
+  const tokens = [...new Set([...perfilTermos(input).keys(), ...extrairEntidades(input)])]
+  const q = expandirDominio(tokens, vocab).filter((t) => t.length >= MIN_TOKEN_ESCOPO)
   if (!q.length) return []
 
   const out: { arquivo: string; score: number }[] = []
@@ -744,7 +748,7 @@ export async function montarPacote(
   // acha o alvo quando a palavra do leigo não bate o nome do símbolo ("recarga/saldo" -> addCredit).
   // Zero token. Entrega a superfície dos top-N pro modelo escanear e apontar arquivo:linha.
   if (pares.length === 0 && focoLista.length === 0) {
-    const ranqueados = rankearPorTermos(indice, extrairEntidades(input))
+    const ranqueados = rankearPorTermos(indice, input)
       .filter((r) => noEscopo(r.arquivo))
       .slice(0, MAX_FOCO_TERMOS)
     if (ranqueados.length) {

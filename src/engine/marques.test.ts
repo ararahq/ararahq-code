@@ -84,6 +84,14 @@ describe("Marques — ponte de domínio PT→EN (aterrada no vocab)", () => {
   test("preserva os tokens originais", () => {
     expect(expandirDominio(["saldo"])).toContain("saldo")
   })
+
+  test("mapeia conta/cliente pro vocabulário de conta do projeto (achar o WalletService)", () => {
+    const vocab = new Set(["organization", "user", "wallet", "balance", "credit"])
+    const r = expandirDominio(["conta", "cliente", "credito"], vocab)
+    expect(r).toContain("organization")
+    expect(r).toContain("user")
+    expect(r).toContain("credit")
+  })
 })
 
 describe("3.7 — decidirModo usa referência agnóstica no desempate", () => {

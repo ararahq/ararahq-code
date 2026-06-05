@@ -517,10 +517,10 @@ export async function diagnosticarComFallback(
   let modelo = cadeia[0] ?? ""
   let primeiroMapa = true
 
-  // COMEÇA BARATO (cadeia[0] = deepseek) e SÓ escala no sweet spot da arquitetura: a COMPARAÇÃO
-  // PAREADA precisa, onde mais raciocínio (até o opus) de fato compensa. Tudo o mais — superfície
-  // escopada (SDK pequeno) ou grep — roda 1 passada barata e devolve: escalar modelo aqui não
-  // LOCALIZA melhor, só custa caro e arrisca timeout (cada passada é lenta). "Sem escalar no simples."
+  // COMEÇA BARATO (cadeia[0]) e SÓ escala no sweet spot da arquitetura: a COMPARAÇÃO PAREADA precisa,
+  // onde mais raciocínio (até o opus) de fato compensa. Superfície escopada / grep roda 1 passada e
+  // devolve — medido: escalar sobre superfície custa ~60x mais e NÃO converte (variância do modelo +
+  // bug sutil que pede par, não dump). Sem par = sem escalar. "Gasta só onde o material justifica."
   const maxModelos = material.pares.length > 0 ? cadeia.length : 1
   for (let i = 0; i < cadeia.length && i < maxModelos; i++) {
     const slug = cadeia[i]

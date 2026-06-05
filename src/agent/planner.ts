@@ -4,7 +4,7 @@ import { provedor } from "../llm/openrouter"
 export type Fase = "ler" | "editar" | "verificar" | "geral"
 export type Passo = { texto: string; fase: Fase }
 
-const MODELO_PLANO = "deepseek/deepseek-chat"
+const MODELO_PLANO = "deepseek/deepseek-v4-flash"
 const SISTEMA_PLANO =
   "Você decompõe uma tarefa de programação em passos atômicos e ordenados. " +
   "Responda APENAS com um array JSON de strings curtas, em português, na ordem de execução. " +

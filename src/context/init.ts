@@ -5,7 +5,7 @@ import { provedor } from "../llm/openrouter"
 import { carregarContexto, resetContexto, caminhoCache, temSintese } from "./projeto"
 import { ui } from "../terminal/ui"
 
-const MODELO = "deepseek/deepseek-chat"
+const MODELO = "deepseek/deepseek-v4-flash"
 const MAX_EVID = 14000
 const MAX_SUBREADME = 6
 

@@ -1,29 +1,41 @@
 import {
   decidirModo,
+  detectarComposta,
   temStackTrace,
   tamanhoPrevisto,
   respostaHedge,
   type Modo,
 } from "../engine/marques"
+import type { IndiceParaRef } from "../engine/refcodigo"
 import { pareceLoopLongo } from "./planner"
 
 // As 5 marchas do sistema Jade. O usuário vê só "Jade"; por baixo, cada marcha é um modelo
 // (preços OpenRouter em USD por 1M tokens). M1 (trivial) roda local no Ollama, custo ~zero.
 export const MODELOS = {
-  execucao: "deepseek/deepseek-v3.2",
-  diagnostico: "google/gemini-3.1-pro-preview",
+  execucao: "deepseek/deepseek-v4-flash",
+  diagnostico: "deepseek/deepseek-v4-pro",
   loopLongo: "moonshotai/kimi-k2.6",
+  // Copiloto — compreender: contexto longo barato (1M), volume de leitura, não insight.
+  compreender: "deepseek/deepseek-v4-flash",
 } as const
 
 export const CUSTO: Record<string, { in: number; out: number }> = {
-  "deepseek/deepseek-v3.2": { in: 0.28, out: 0.42 },
+  "deepseek/deepseek-v4-flash": { in: 0.0983, out: 0.1966 },
+  "deepseek/deepseek-v4-pro": { in: 0.435, out: 0.87 },
   "google/gemini-3.1-pro-preview": { in: 2.0, out: 12.0 },
-  "openai/gpt-5.5": { in: 2.5, out: 15.0 },
-  "anthropic/claude-opus-4.7": { in: 5.0, out: 25.0 },
+  "openai/gpt-5.5": { in: 5.0, out: 30.0 },
+  "anthropic/claude-opus-4.8": { in: 5.0, out: 25.0 },
   "moonshotai/kimi-k2.6": { in: 0.68, out: 3.42 },
 }
 
-export type Decisao = { modo: Modo; thinking: boolean; modelo: string; motivo: string }
+export type Decisao = {
+  modo: Modo
+  thinking: boolean
+  modelo: string
+  motivo: string
+  // 3.6 — input com 3+ intenções numa frase só: o agent não roteia, pede pro usuário quebrar.
+  pedirQuebra?: boolean
+}
 
 // 3.0 herança de contexto: guarda o diagnóstico mastigado da última tarefa que cravou (persiste
 // entre tarefas; some no restart do processo). Um seguimento curto ("agora aplica isso") aplica
@@ -49,9 +61,18 @@ export function resetSessao(): void {
  * execução. Decide modo, thinking on/off, modelo e o motivo (só log interno — o usuário vê só "Jade").
  * Função pura sobre o input. A herança de contexto (seguimento) é resolvida no agent.
  */
-export function rotear(input: string): Decisao {
-  const modo = decidirModo(input)
+export function rotear(input: string, indice?: IndiceParaRef): Decisao {
+  // 3.6 — tarefa composta: 3+ intenções => pede pra quebrar; diag+exec encadeados => força
+  // diagnóstico-primeiro (o pipeline M3->M5 aplica a correção), em vez de o desempate de
+  // decidirModo escolher errado (executar sem diagnosticar quando há um arquivo citado).
+  const composta = detectarComposta(input, indice)
+  if (composta?.tipo === "demais") {
+    return { modo: "diagnostico", thinking: false, modelo: MODELOS.diagnostico, motivo: "muitas-intencoes", pedirQuebra: true }
+  }
+  const modo = composta ? "diagnostico" : decidirModo(input, indice)
   if (modo === "conversa") return { modo, thinking: false, modelo: MODELOS.execucao, motivo: "conversa" }
+  // Copiloto — compreender: explicação/panorama, contexto longo barato, thinking OFF, não edita.
+  if (modo === "compreender") return { modo, thinking: false, modelo: MODELOS.compreender, motivo: "compreender" }
   if (temStackTrace(input)) {
     return { modo: "diagnostico", thinking: true, modelo: MODELOS.diagnostico, motivo: "stack-trace" }
   }
@@ -64,7 +85,7 @@ export function rotear(input: string): Decisao {
   return { modo, thinking: false, modelo: MODELOS.execucao, motivo: "execucao" }
 }
 
-// Cadeia de escalada de modelo de EXECUÇÃO (D5): v3.2 -> Kimi (loop longo). Diagnóstico tem
+// Cadeia de escalada de modelo de EXECUÇÃO (D5): v4-flash -> Kimi (loop longo). Diagnóstico tem
 // sua própria cadeia de fallback invisível (proximoFallbackDiagnostico), não usa esta.
 const ESCALADA: string[] = [MODELOS.execucao, MODELOS.loopLongo]
 
@@ -104,15 +125,16 @@ export function deveReclassificarPraDiagnostico(modo: Modo, houveEdicao: boolean
   return respostaHedge(resposta)
 }
 
-// Cadeia de fallback INVISÍVEL do diagnóstico (M3, D6). COMEÇA BARATO: deepseek-v3.2 ($0.28/$0.42).
-// Bug simples com contexto bom o barato crava — sem nascer num modelo caro. Só escala (gemini ->
-// gpt-5.5 -> opus) quando trava E o material justifica (par preciso / superfície escopada). O quanto
-// escala é decidido pela QUALIDADE do material no diagnosticarComFallback, não aqui. Usuário vê só "Jade".
+// Cadeia de fallback INVISÍVEL do diagnóstico (M3, D6). COMEÇA BARATO: v4-flash ($0.0983/$0.1966).
+// Bug simples com contexto bom o barato crava. O titular do raciocínio é o v4-pro (SWE 80.6% por uma
+// fração do custo). Só escala (gemini -> gpt-5.5 -> opus-4.8) quando trava E o material justifica (par
+// preciso). O quanto escala é decidido pela QUALIDADE do material no diagnosticarComFallback, não aqui.
 export const CADEIA_DIAGNOSTICO: string[] = [
   MODELOS.execucao,
   MODELOS.diagnostico,
+  "google/gemini-3.1-pro-preview",
   "openai/gpt-5.5",
-  "anthropic/claude-opus-4.7",
+  "anthropic/claude-opus-4.8",
 ]
 
 /**

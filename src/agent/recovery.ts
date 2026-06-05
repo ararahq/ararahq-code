@@ -4,6 +4,10 @@
 
 export const TETO_RECOVERY = 6
 export const ERROS_CODIGO_PRA_ESCALAR = 3
+// 3.5 — teto de trocas de MARCHA (reclassificações) por tarefa. Distinto de escalar MODELO dentro da
+// mesma marcha. Conta JUNTO com TETO_RECOVERY: o que estourar primeiro corta. Oscilar de natureza =
+// sinal de que precisa de direção humana.
+export const TETO_TROCAS_MARCHA = 3
 
 // Sinais de erro de AMBIENTE (versão/ferramenta/dependência) vs erro de CÓDIGO (compilação/tipo).
 const RE_AMBIENTE =
@@ -21,12 +25,13 @@ type Estado = {
   errosCodigo: number
   ultimaAssinatura: string | null
   escaladaPendente: boolean
+  trocasMarcha: number
 }
 
 let estado: Estado = nova()
 
 function nova(): Estado {
-  return { tentativas: 0, errosCodigo: 0, ultimaAssinatura: null, escaladaPendente: false }
+  return { tentativas: 0, errosCodigo: 0, ultimaAssinatura: null, escaladaPendente: false, trocasMarcha: 0 }
 }
 
 export function resetRecovery(): void {
@@ -72,6 +77,24 @@ export function registrarFalha(saida: string): ResultadoRecovery {
     escalar: estado.escaladaPendente,
     estourou: estado.tentativas >= TETO_RECOVERY,
   }
+}
+
+/**
+ * 3.5 — Ainda pode trocar de marcha? Só se NÃO estourou o teto de trocas (3) NEM o teto global de
+ * tentativas (6) — o que vier primeiro corta. Função consultada antes de reclassificar.
+ */
+export function podeTrocarMarcha(): boolean {
+  return estado.trocasMarcha < TETO_TROCAS_MARCHA && estado.tentativas < TETO_RECOVERY
+}
+
+/** 3.5 — Conta uma troca de marcha (reclassificação). Chamar ao efetivar o pivô de marcha. */
+export function registrarTrocaMarcha(): { trocas: number; podeContinuar: boolean } {
+  estado.trocasMarcha++
+  return { trocas: estado.trocasMarcha, podeContinuar: podeTrocarMarcha() }
+}
+
+export function trocasMarcha(): number {
+  return estado.trocasMarcha
 }
 
 export function escaladaPendente(): boolean {

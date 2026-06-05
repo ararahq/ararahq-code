@@ -247,6 +247,7 @@ const FRACAO_GRAFO = 0.5
 const BOOST_CENTRALIDADE = 0.3
 const SEMENTES_GRAFO = 8
 const TOP_CENTRAIS = 40
+const LOTE_LEITURA = 64
 
 /** Casa o termo no INÍCIO de uma palavra (raiz), case-insensitive: `auth` casa `authenticate`, não `oauth`. */
 function reTermo(termo: string): RegExp {
@@ -276,21 +277,23 @@ export async function ranquearCandidatos(raiz: string, indice: Indice, termos: s
   const res = termos.map(reTermo)
   const casados = new Map<string, number[]>()
   const df = new Array(termos.length).fill(0)
-  for (const s of indice.simbolos) {
-    let txt: string
-    try {
-      txt = await Bun.file(`${raiz}/${s.arquivo}`).text()
-    } catch {
-      continue
-    }
-    const quais: number[] = []
-    for (let i = 0; i < res.length; i++) {
-      if (res[i].test(txt)) {
-        quais.push(i)
-        df[i]++
+  // I/O em paralelo por lotes — ler ~2k arquivos em série estourava o tempo em repos grandes.
+  const arquivos = indice.simbolos.map((s) => s.arquivo)
+  for (let ini = 0; ini < arquivos.length; ini += LOTE_LEITURA) {
+    const lote = arquivos.slice(ini, ini + LOTE_LEITURA)
+    const textos = await Promise.all(lote.map((a) => Bun.file(`${raiz}/${a}`).text().catch(() => null)))
+    for (let j = 0; j < lote.length; j++) {
+      const txt = textos[j]
+      if (txt == null) continue
+      const quais: number[] = []
+      for (let i = 0; i < res.length; i++) {
+        if (res[i].test(txt)) {
+          quais.push(i)
+          df[i]++
+        }
       }
+      if (quais.length) casados.set(lote[j], quais)
     }
-    if (quais.length) casados.set(s.arquivo, quais)
   }
 
   const N = Math.max(1, indice.simbolos.length)
@@ -329,4 +332,29 @@ export async function ranquearCandidatos(raiz: string, indice: Indice, termos: s
   return [...score.entries()]
     .map(([arquivo, s]) => ({ arquivo, score: s, estrutural: estrut.get(arquivo) ?? false, termos: quaisTermos.get(arquivo) ?? [] }))
     .sort((a, b) => b.score - a.score || a.arquivo.localeCompare(b.arquivo))
+}
+
+// Margem mínima do top-1 sobre o top-2 pra considerar "confiante". Junto com match estrutural, é o gate
+// que libera escalar pro pago no arquivo único — senão vira shortlist ou abstenção. Medido: estrutural
+// no topo separou os TOP-1 certos dos enterrados.
+const LIMIAR_MARGEM = 1.3
+
+/**
+ * Gate de confiança do custo: o top-1 é forte o bastante pra escalar pro pago NELE? Exige match
+ * estrutural (termo no nome do arquivo/símbolo) E margem sobre o segundo. Sem isso, o chamador deve
+ * usar a shortlist (top-N) ou abster — nunca pagar às cegas.
+ */
+export function gateConfianca(candidatos: Candidato[]): boolean {
+  if (!candidatos.length || !candidatos[0].estrutural) return false
+  return candidatos.length < 2 || candidatos[0].score >= candidatos[1].score * LIMIAR_MARGEM
+}
+
+/** Localiza o arquivo a partir de termos JÁ em vocabulário de código (a tradução fica no chamador, com modelo). */
+export async function localizarArquivo(
+  raiz: string,
+  indice: Indice,
+  termos: string[],
+): Promise<{ candidatos: Candidato[]; confiante: boolean }> {
+  const candidatos = await ranquearCandidatos(raiz, indice, termos)
+  return { candidatos, confiante: gateConfianca(candidatos) }
 }

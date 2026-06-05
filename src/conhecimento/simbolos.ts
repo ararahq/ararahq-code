@@ -408,15 +408,25 @@ export type MapaSimbolico = {
   reverso: Record<string, string[]>
 }
 
-/** Monta o índice reverso `nome do símbolo -> arquivos que o definem`. */
+/**
+ * Monta o índice reverso `nome do símbolo -> arquivos que o definem`. Usa Map (não objeto) porque o
+ * código alheio pode ter símbolo chamado `constructor`/`toString`/`hasOwnProperty` — num objeto `{}`
+ * essas chaves resolvem pra herança do Object.prototype e quebram (`.add` não é função). Map e o
+ * retorno sem protótipo (`create(null)`) blindam contra prototype pollution em qualquer codebase.
+ */
 export function indiceReverso(arquivos: ArquivoSimbolos[]): Record<string, string[]> {
-  const rev: Record<string, Set<string>> = {}
+  const rev = new Map<string, Set<string>>()
   for (const a of arquivos) {
     for (const s of a.simbolos) {
-      ;(rev[s.nome] ??= new Set()).add(a.arquivo)
+      let set = rev.get(s.nome)
+      if (!set) {
+        set = new Set()
+        rev.set(s.nome, set)
+      }
+      set.add(a.arquivo)
     }
   }
-  const out: Record<string, string[]> = {}
-  for (const [nome, set] of Object.entries(rev)) out[nome] = [...set]
+  const out: Record<string, string[]> = Object.create(null)
+  for (const [nome, set] of rev) out[nome] = [...set]
   return out
 }

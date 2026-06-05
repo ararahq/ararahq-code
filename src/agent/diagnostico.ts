@@ -366,6 +366,11 @@ const SISTEMA_RACIOCINIO =
   "listando os arquivos exatos que faltam. NÃO chute conclusão sobre material incompleto, mas também NÃO peça arquivo que já está abaixo.\n" +
   "Com material suficiente, responda CURTO e estruturado, sem hedge (nada de 'provavelmente'/'talvez'): (1) CAUSA RAIZ — arquivo:linha e o trecho exato; (2) CORREÇÃO — o que trocar por quê (de X para Y), preciso o bastante pra outro dev aplicar sem pensar."
 
+// Material ESCOPADO (superfície do escopo do sintoma) = tudo que existe sobre o assunto já está abaixo.
+// Pedir mais arquivo aqui é fuga: a causa ESTÁ neste código. Suprime o FALTA: pra o modelo cravar.
+const ESCOPADO_SUFIXO =
+  "\n\nESTE É TODO O MATERIAL relevante ao sintoma (superfície escopada). NÃO responda 'FALTA:' nem peça mais arquivos — a causa ESTÁ neste código; aponte a CAUSA RAIZ (arquivo:linha) com o que está aqui."
+
 /** Extrai os arquivos que o raciocínio pediu pra ver (linha "FALTA: a, b"). [] se não pediu nada. */
 export function parseFalta(texto: string): string[] {
   const m = texto.match(RE_FALTA)
@@ -475,7 +480,7 @@ export async function diagnosticar(
   const maxRodadas = material.escopado ? 1 : MAX_RODADAS_RACIOCINIO
   for (let i = 1; i <= maxRodadas; i++) {
     rodadas = i
-    const r = await raciocinarDiagnostico(input, dossie, model, signal, effort)
+    const r = await raciocinarDiagnostico(input, dossie, model, signal, effort, material.escopado)
     inTok += r.inTok
     outTok += r.outTok
     texto = r.texto
@@ -584,7 +589,7 @@ export async function gerarCandidatosDiagnostico(
   signal?: AbortSignal,
 ): Promise<CandidatoDiagnostico[]> {
   const tarefas = Array.from({ length: n }, (_, i) =>
-    raciocinarDiagnostico(input, material.texto, model, signal, "high", TEMPS_CANDIDATOS[i % TEMPS_CANDIDATOS.length])
+    raciocinarDiagnostico(input, material.texto, model, signal, "high", material.escopado, TEMPS_CANDIDATOS[i % TEMPS_CANDIDATOS.length])
       .then((r) => ({ candidato: { texto: r.texto, inTok: r.inTok, outTok: r.outTok }, cravou: r.texto.length > 0 && !detectouHedge(r.texto) }))
       .catch(() => null),
   )
@@ -605,11 +610,12 @@ export async function raciocinarDiagnostico(
   model: Parameters<typeof generateText>[0]["model"],
   signal?: AbortSignal,
   effort: Esforco = "high",
+  escopado = false,
   temperatura = 0.2,
 ): Promise<{ texto: string; inTok: number; outTok: number }> {
   const r = await generateText({
     model,
-    system: SISTEMA_RACIOCINIO,
+    system: escopado ? SISTEMA_RACIOCINIO + ESCOPADO_SUFIXO : SISTEMA_RACIOCINIO,
     prompt: `SINTOMA:\n${input}\n\nTRECHOS DOS PONTOS QUE TOCAM NO SINTOMA:\n${dossie}\n\nCompare os caminhos e diagnostique.`,
     providerOptions: { openrouter: { reasoning: { effort } } },
     temperature: temperatura,

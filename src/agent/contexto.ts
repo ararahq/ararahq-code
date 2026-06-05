@@ -264,6 +264,25 @@ function featuresGuarda(corpo: string): Set<string> {
   return f
 }
 
+const RE_CATCH = /\bcatch\b|\bexcept\b|\brescue\b/i
+const RE_RELANCA = /\b(throw|raise|rethrow)\b/i
+// Verbos de PERSISTÊNCIA universais (save/insert/update...). Não inclui "create"/"add" (ambíguos:
+// createAlert/addListener não escrevem estado). É o que distingue escrita de notificação/leitura.
+const RE_WRITE_CALLEE = /^(save|persist|insert|update|delete|upsert|store|merge|flush|write)/i
+
+/**
+ * "Engole erro em volta de escrita": o método tem catch, escreve estado (chama um callee de
+ * persistência) e o catch NÃO relança — o erro do write some silenciosamente. Anti-padrão UNIVERSAL
+ * (qualquer linguagem/banco): perda de dado/dinheiro sem alarme. Não conhece domínio nem framework.
+ */
+export function engoleEmVoltaDeWrite(corpo: string, callees: string[]): boolean {
+  if (!RE_CATCH.test(corpo)) return false
+  if (!callees.some((c) => RE_WRITE_CALLEE.test(c))) return false
+  const i = corpo.search(RE_CATCH)
+  const handler = i >= 0 ? corpo.slice(i) : corpo
+  return !RE_RELANCA.test(handler)
+}
+
 const LINHAS_ANOTACAO = 3
 
 /**
@@ -279,7 +298,7 @@ async function parearPorGuarda(
   foco: Set<string>,
   entidades: string[],
 ): Promise<ParGrafo[]> {
-  type M = { metodo: string; linha: number; callees: string[]; features: Set<string> }
+  type M = { metodo: string; linha: number; callees: string[]; features: Set<string>; engoleWrite: boolean }
   const candidatos: ParGrafo[] = []
   for (const arq of indice.simbolos) {
     if (!foco.has(arq.arquivo) || ehRepoInterface(arq.arquivo)) continue
@@ -294,17 +313,27 @@ async function parearPorGuarda(
       if ((s.tipo !== "metodo" && s.tipo !== "funcao") || s.linhaFim - s.linhaInicio < MIN_CORPO_METODO) continue
       const ini = Math.max(0, s.linhaInicio - 1 - LINHAS_ANOTACAO)
       const corpo = linhas.slice(ini, s.linhaFim).join("\n")
-      metodos.push({ metodo: s.nome, linha: s.linhaInicio, callees: s.chama, features: featuresGuarda(corpo) })
+      metodos.push({
+        metodo: s.nome,
+        linha: s.linhaInicio,
+        callees: s.chama,
+        features: featuresGuarda(corpo),
+        engoleWrite: engoleEmVoltaDeWrite(corpo, s.chama),
+      })
     }
     for (const [a, b] of combinar(metodos)) {
       const comum = a.callees.find((c) => c.length >= MIN_LEN_CALLEE && b.callees.includes(c))
       if (!comum) continue
       const diff = [...a.features].filter((x) => !b.features.has(x)).concat([...b.features].filter((x) => !a.features.has(x)))
-      if (!diff.length) continue
+      // Divergência: ou um engole erro em volta de escrita e o outro não (sinal forte de bug de fluxo),
+      // ou diferem numa guarda estrutural. Sem nenhuma das duas, não é par.
+      const engoleDiverge = a.engoleWrite !== b.engoleWrite
+      if (!engoleDiverge && !diff.length) continue
       let score = 4 + diff.length * 2 + Math.round(similaridade(a.metodo, b.metodo) * 2)
+      if (engoleDiverge) score += 6 // engolir o erro de um WRITE é o anti-padrão que mais causa bug silencioso
       if (entidades.some((e) => a.metodo.toLowerCase().includes(e) || b.metodo.toLowerCase().includes(e))) score += 3
       candidatos.push({
-        familia: `guarda (${diff.join(", ")})`,
+        familia: engoleDiverge ? "guarda (um engole o erro de uma escrita, o outro não)" : `guarda (${diff.join(", ")})`,
         entidade: entidades[0] ?? "",
         a: { metodo: a.metodo, arquivo: arq.arquivo, linha: a.linha, chamada: comum },
         b: { metodo: b.metodo, arquivo: arq.arquivo, linha: b.linha, chamada: comum },
@@ -795,10 +824,19 @@ export async function montarPacote(
 
   const chamadas = chamadasDeOperacao(indice, foco)
   const paresChamada = parearPorGrafo(chamadas, entidades)
-  // Sinal 2 (guarda): irmãos que tocam a mesma coisa mas divergem num construto universal (try/catch,
-  // transação, nulo, dedupe). Pega bug de fluxo que o Sinal 1 (variante de chamada) não vê.
-  const paresGuarda = paresChamada.length >= MAX_PARES ? [] : await parearPorGuarda(raiz, indice, foco, entidades)
-  const pares = [...paresChamada, ...paresGuarda].slice(0, MAX_PARES)
+  // Sinal 2 (guarda): irmãos que tocam a mesma coisa mas divergem numa GUARDA universal (engolir o erro
+  // de uma escrita, try/catch, transação, nulo, dedupe). Pega bug de fluxo que o Sinal 1 (variante de
+  // chamada) não vê. Roda SEMPRE e mescla ORDENANDO por score — o sinal mais forte vence, não a ordem.
+  const paresGuarda = await parearPorGuarda(raiz, indice, foco, entidades)
+  const pares: ParGrafo[] = []
+  const vistosPar = new Set<string>()
+  for (const p of [...paresChamada, ...paresGuarda].sort((x, y) => y.score - x.score)) {
+    const k = [p.a.metodo, p.b.metodo].sort().join("|")
+    if (vistosPar.has(k)) continue
+    vistosPar.add(k)
+    pares.push(p)
+    if (pares.length >= MAX_PARES) break
+  }
 
   // Sem par preciso, mas o sintoma aponta um subtree? Entrega o subtree pequeno INTEIRO (superfície
   // escopada) pro modelo escanear — resolve bug de literal/config sem símbolo (base_url, import morto),

@@ -2,7 +2,28 @@ import { test, expect, describe, afterEach } from "bun:test"
 import { mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { montarMapaAmplo, montarPacote, parearPorGrafo } from "./contexto"
+import { montarMapaAmplo, montarPacote, parearPorGrafo, engoleEmVoltaDeWrite } from "./contexto"
+
+describe("Sinal 2 — engoleEmVoltaDeWrite (anti-padrão universal, sem domínio)", () => {
+  test("catch que engole o erro de uma escrita (save) é detectado", () => {
+    const corpo = `fun apply() {
+      try { wallet.balance += b; repo.save(wallet) }
+      catch (e: Exception) { log.error("falhou", e) }
+    }`
+    expect(engoleEmVoltaDeWrite(corpo, ["save"])).toBe(true)
+  })
+  test("catch que RELANÇA não engole", () => {
+    const corpo = `fun apply() { try { repo.save(x) } catch (e) { log.error(e); throw e } }`
+    expect(engoleEmVoltaDeWrite(corpo, ["save"])).toBe(false)
+  })
+  test("sem escrita (só notificação) não conta", () => {
+    const corpo = `fun notify() { try { mailer.send(msg) } catch (e) { log.error(e) } }`
+    expect(engoleEmVoltaDeWrite(corpo, ["send"])).toBe(false)
+  })
+  test("sem catch não conta", () => {
+    expect(engoleEmVoltaDeWrite("fun f() { repo.save(x) }", ["save"])).toBe(false)
+  })
+})
 
 describe("pareamento genérico (Sinal 1) — sem domínio/JPA", () => {
   test("pareia métodos irmãos cujos callees são variantes da mesma operação", () => {

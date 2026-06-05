@@ -64,6 +64,28 @@ export async function registrarBug(
   return bug
 }
 
+// Primeiro `arquivo:linha` citado num texto (agnóstico de extensão, como o resto do 3.7).
+const RE_ARQUIVO_LINHA = /[\w./-]+\.[A-Za-z][A-Za-z0-9]{1,9}:\d+/
+
+/**
+ * 1.5 — Monta o registro de um bug resolvido a partir do sintoma original, do diagnóstico mastigado e
+ * dos arquivos editados. Pura e testável: o agent chama `registrarBug` com o resultado SÓ quando o
+ * build fecha verde num fluxo de diagnóstico — assim a memória acumula casos de verdade, não palpites.
+ */
+export function montarRegistroBug(
+  sintoma: string,
+  diagnostico: string,
+  editados: string[],
+): { sintoma: string; causaRaiz: string; arquivoLinha: string; correcao: string } {
+  const arquivoLinha = diagnostico.match(RE_ARQUIVO_LINHA)?.[0] ?? editados[0] ?? ""
+  return {
+    sintoma: sintoma.trim().slice(0, 300),
+    causaRaiz: diagnostico.trim().slice(0, 600),
+    arquivoLinha,
+    correcao: editados.length ? `editado: ${editados.join(", ")}` : "verificado pelo build",
+  }
+}
+
 /** Registra uma decisão de arquitetura/projeto. Persiste acumulando entre sessões. */
 export async function registrarDecisao(
   raiz: string,

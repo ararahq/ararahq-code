@@ -1,7 +1,9 @@
 import { generateText } from "ai"
-import { extrairEntidades, ehGenerico, linguagensCitadas } from "../engine/marques"
+import { extrairEntidades, ehGenerico } from "../engine/marques"
 import { comandoBusca, comandoContagem, rodar } from "../tools"
-import { montarPacote } from "./contexto"
+import { montarPacote, escoposCitados } from "./contexto"
+import { criarResumirFn } from "../context/resumir"
+import { listarFontes } from "../conhecimento/walk"
 
 const MAX_HITS = 15
 const TIMEOUT_BUSCA = 15_000
@@ -77,11 +79,12 @@ export type ArquivoRank = { arquivo: string; hits: number }
  * sintoma cita uma linguagem, FILTRA pros arquivos daquele ecossistema — sem isso, num monorepo
  * poliglota a prosa casa centenas de arquivos e o dossiê explode (a passada do modelo dá timeout).
  */
-export async function arquivosRelevantes(entidades: string[], exts: string[] = []): Promise<ArquivoRank[]> {
+export async function arquivosRelevantes(entidades: string[], prefixos: string[] = []): Promise<ArquivoRank[]> {
   const query = queryDe(entidades)
   if (!query) return []
   const { saida } = await rodar(comandoContagem(query), undefined, TIMEOUT_BUSCA)
-  const noEscopo = (arquivo: string) => exts.length === 0 || exts.some((e) => arquivo.endsWith(e))
+  const noEscopo = (arquivo: string) =>
+    prefixos.length === 0 || prefixos.some((p) => arquivo === p || arquivo.startsWith(`${p}/`))
   return saida
     .split("\n")
     .map((l) => l.match(/^(.+):(\d+)$/))
@@ -96,8 +99,8 @@ export async function arquivosRelevantes(entidades: string[], exts: string[] = [
  * com ruído excluído). Determinístico e rápido — dá ao raciocínio o material certo pra comparar,
  * em vez de uma busca aberta. Antes pegava os 4 primeiros por ordem do grep e vinha só frontend.
  */
-export async function lerDossie(entidades: string[], exts: string[] = []): Promise<string> {
-  const arquivos = await arquivosRelevantes(entidades, exts)
+export async function lerDossie(entidades: string[], prefixos: string[] = []): Promise<string> {
+  const arquivos = await arquivosRelevantes(entidades, prefixos)
   const partes: string[] = []
   for (const { arquivo } of arquivos) {
     try {
@@ -421,7 +424,7 @@ export type ResultadoFallback = ResultadoDiagnostico & {
  * modelos da cadeia de fallback sem recomputar I/O.
  */
 export async function reunirMaterial(input: string): Promise<Material> {
-  const pacote = await montarPacote(process.cwd(), input)
+  const pacote = await montarPacote(process.cwd(), input, criarResumirFn())
   if (pacote.forte && pacote.texto.trim()) {
     const pares: Par[] = pacote.pares.map((p) => ({
       entidade: p.entidade,
@@ -437,9 +440,9 @@ export async function reunirMaterial(input: string): Promise<Material> {
 /** Gather LEGADO por grep (fallback quando o índice resolve pouco). Preserva o caminho v0.1.6. */
 async function reunirMaterialGrep(input: string): Promise<Material> {
   const entidades = extrairEntidades(input)
-  const exts = linguagensCitadas(input)[0]?.exts ?? []
-  const ranking = await arquivosRelevantes(entidades, exts)
-  const [dossie, pares] = await Promise.all([lerDossie(entidades, exts), montarPares(entidades, ranking)])
+  const prefixos = await escoposCitados(process.cwd(), input, await listarFontes(process.cwd()))
+  const ranking = await arquivosRelevantes(entidades, prefixos)
+  const [dossie, pares] = await Promise.all([lerDossie(entidades, prefixos), montarPares(entidades, ranking)])
   const blocoPares = renderPares(pares, entidades)
   const texto = blocoPares ? `${blocoPares}\n\n--- código completo dos pontos ---\n${dossie}` : dossie
   return { entidades, hits: ranking.reduce((s, a) => s + a.hits, 0), pares, dossie, texto, fonte: "grep", escopado: false }
@@ -562,6 +565,33 @@ export async function diagnosticarComFallback(
   }
 }
 
+export type CandidatoDiagnostico = { texto: string; inTok: number; outTok: number }
+
+const TEMPS_CANDIDATOS = [0.2, 0.5, 0.8, 1.0]
+
+/**
+ * 3.4 — Gera N candidatos de diagnóstico EM PARALELO sobre o MESMO material já reunido, variando a
+ * temperatura pra diversificar as hipóteses. Raciocínio puro (sem efeito colateral) — paralelizar é
+ * seguro e corta latência. Devolve só os candidatos que CRAVARAM (arquivo:linha, sem hedge). Quem
+ * chama seleciona por VERIFICAÇÃO (aplica o fix + build), via `selecionarPorVerificacao`. PAGO: N
+ * passadas de raciocínio — usar só no diagnóstico difícil que a 1ª passada não cravou.
+ */
+export async function gerarCandidatosDiagnostico(
+  input: string,
+  material: Material,
+  model: Parameters<typeof generateText>[0]["model"],
+  n: number,
+  signal?: AbortSignal,
+): Promise<CandidatoDiagnostico[]> {
+  const tarefas = Array.from({ length: n }, (_, i) =>
+    raciocinarDiagnostico(input, material.texto, model, signal, "high", TEMPS_CANDIDATOS[i % TEMPS_CANDIDATOS.length])
+      .then((r) => ({ candidato: { texto: r.texto, inTok: r.inTok, outTok: r.outTok }, cravou: r.texto.length > 0 && !detectouHedge(r.texto) }))
+      .catch(() => null),
+  )
+  const res = await Promise.all(tarefas)
+  return res.filter((r): r is { candidato: CandidatoDiagnostico; cravou: boolean } => r != null && r.cravou).map((r) => r.candidato)
+}
+
 /**
  * Fase 1 do diagnóstico: UMA passada de raciocínio (thinking ON) sobre o material já reunido.
  * Cospe o diagnóstico mastigado (causa raiz + correção) que o modelo rápido executa na fase 2.
@@ -575,13 +605,14 @@ export async function raciocinarDiagnostico(
   model: Parameters<typeof generateText>[0]["model"],
   signal?: AbortSignal,
   effort: Esforco = "high",
+  temperatura = 0.2,
 ): Promise<{ texto: string; inTok: number; outTok: number }> {
   const r = await generateText({
     model,
     system: SISTEMA_RACIOCINIO,
     prompt: `SINTOMA:\n${input}\n\nTRECHOS DOS PONTOS QUE TOCAM NO SINTOMA:\n${dossie}\n\nCompare os caminhos e diagnostique.`,
     providerOptions: { openrouter: { reasoning: { effort } } },
-    temperature: 0.2,
+    temperature: temperatura,
     abortSignal: signal,
   })
   const u = r.usage as {

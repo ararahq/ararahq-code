@@ -4,13 +4,10 @@
 // de escopo/edições por-rodada, setado no início da Fase 2 e checado dentro de editar_arquivo.
 
 import type { ProjectInfo } from "../conhecimento/stack"
+import { extrairArquivosCitados } from "../engine/refcodigo"
+import { detectarContradicao, type Edicao } from "../engine/marques"
 
 // --- 4.3-ESCOPO: extração do escopo permitido do diagnóstico mastigado -------
-
-// Caminho de arquivo de código com extensão conhecida, citado como "arquivo" ou "arquivo:linha".
-// Casa AraraPhoneNumberService.kt, src/main/.../MessageService.kt:360, app/page.tsx etc.
-const RE_ARQUIVO_FONTE =
-  /\b([\w./-]+\.(?:kt|kts|java|ts|tsx|js|jsx|py|go|rs|php|rb|scala|swift|c|cc|cpp|h|hpp|cs|vue|svelte))\b/gi
 
 /** Normaliza pra comparação: tira `./` inicial e a parte `:linha`, mantém o caminho do arquivo. */
 function normalizarArquivo(bruto: string): string {
@@ -31,12 +28,8 @@ export type Escopo = {
  * arquivo de código, devolve escopo LIVRE (sem trava) — não inventa restrição onde não há alvo.
  */
 export function escopoDoDiagnostico(textoMastigado: string): Escopo {
-  const arquivos = new Set<string>()
-  for (const m of textoMastigado.matchAll(RE_ARQUIVO_FONTE)) {
-    const arq = normalizarArquivo(m[1])
-    if (arq) arquivos.add(arq)
-  }
-  return montarEscopo([...arquivos])
+  const arquivos = extrairArquivosCitados(textoMastigado).map(normalizarArquivo).filter(Boolean)
+  return montarEscopo([...new Set(arquivos)])
 }
 
 /**
@@ -97,12 +90,22 @@ type EstadoCamada4 = {
   edicoesFeitas: Set<string>
   // arquivos fora-de-escopo que o modelo tentou editar — viram a pergunta "quer que eu corrija também?".
   candidatos: Set<string>
+  // 4.3 — histórico das edições aplicadas (pra detectar flip-flop) e das ações já feitas (tool+arg).
+  historico: Edicao[]
+  acoes: Set<string>
 }
 
 const SEM_ESCOPO: Escopo = { arquivos: new Set(), bases: new Set(), livre: true }
 
 function estadoVazio(): EstadoCamada4 {
-  return { escopo: SEM_ESCOPO, editados: new Set(), edicoesFeitas: new Set(), candidatos: new Set() }
+  return {
+    escopo: SEM_ESCOPO,
+    editados: new Set(),
+    edicoesFeitas: new Set(),
+    candidatos: new Set(),
+    historico: [],
+    acoes: new Set(),
+  }
 }
 
 let estado: EstadoCamada4 = estadoVazio()
@@ -126,8 +129,31 @@ export function arquivosEditados(): string[] {
   return [...estado.editados].sort()
 }
 
-export function registrarEdicao(caminho: string): void {
-  estado.editados.add(normalizarArquivo(caminho))
+export function registrarEdicao(caminho: string, ancora = "", novo = ""): void {
+  const arq = normalizarArquivo(caminho)
+  estado.editados.add(arq)
+  estado.historico.push({ arquivo: arq, ancora, novo })
+}
+
+/**
+ * 4.3 — A edição proposta DESFAZ uma já aplicada nesta tarefa (flip-flop X->Y depois Y->X)? Delega
+ * pra Marques.detectarContradicao, que já tem a salvaguarda de escopo (arquivos diferentes não
+ * conflitam). Repetição idêntica não cai aqui — é o dedup de `edicaoRepetida`.
+ */
+export function contradizEdicaoAnterior(caminho: string, ancora: string | undefined, novo: string): boolean {
+  return detectarContradicao(estado.historico, { arquivo: normalizarArquivo(caminho), ancora: ancora ?? "", novo })
+}
+
+/**
+ * 4.3 — Ação repetida: a MESMA chamada (tool + argumento) já rolou nesta tarefa? Registra se for nova.
+ * Mata o loop de repetir a mesma ação sem progredir. Comandos de verificação (build/test) ficam de
+ * fora pelo chamador — re-rodar após um conserto é legítimo.
+ */
+export function acaoRepetida(tool: string, argumento: string): boolean {
+  const k = `${tool}::${argumento}`
+  if (estado.acoes.has(k)) return true
+  estado.acoes.add(k)
+  return false
 }
 
 export function houveEdicao(): boolean {

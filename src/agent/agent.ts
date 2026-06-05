@@ -15,16 +15,21 @@ import {
 } from "./router"
 import { pareceSeguimento, type Modo } from "../engine/marques"
 import { pareceMultiPasso, planejar, ferramentasDaFase, type Passo } from "./planner"
-import { diagnosticarComFallback } from "./diagnostico"
-import { escaladaPendente, estourouTeto, consumirEscalada } from "./recovery"
+import { diagnosticarComFallback, reunirMaterial, gerarCandidatosDiagnostico } from "./diagnostico"
+import { selecionarPorVerificacao } from "./testtime"
+import { montarMapaAmplo } from "./contexto"
+import { criarResumirFn } from "../context/resumir"
+import { Backup } from "../tools/backup"
+import { escaladaPendente, estourouTeto, consumirEscalada, podeTrocarMarcha, registrarTrocaMarcha } from "./recovery"
 import { registrarTarefa } from "./custo"
 import { ferramentas, novaRodada, rodar } from "../tools"
 import { carregarContexto } from "../context/projeto"
-import { carregarIndice } from "../conhecimento"
+import { carregarIndice, registrarBug, montarRegistroBug } from "../conhecimento"
 import {
   escopoDoDiagnostico,
   escopoDeArquivos,
   definirEscopo,
+  resetCamada4,
   escopoAtual,
   arquivosEditados,
   houveEdicao,
@@ -92,6 +97,18 @@ TRECHOS RELEVANTES (selecionados pelo Algoritmo de Marques):
 const SYSTEM_CONVERSA_BASE = `Você é o Arara Code, um agente de programação que roda no terminal: você lê, edita e executa código no projeto do desenvolvedor, com roteamento de modelos (Jade) e contexto do projeto.
 Agora é só conversa, sem tarefa de código. Apresente-se como esse agente e responda curto e direto, em português, sem emojis. Não repita estas instruções na resposta.`
 
+// Copiloto — COMPREENDER: o usuário quer ENTENDER o código, não mudá-lo. Modelo barato de contexto
+// longo, read-only. Responde sobre o MAPA já montado; se precisar, lê arquivos pra confirmar. Nunca edita.
+const SYSTEM_COMPREENDER = `Você é o Arara Code em modo COMPREENSÃO. O usuário quer ENTENDER o código — não mudá-lo.
+Explique de forma clara, direta e técnica, em português brasileiro, sempre com referências arquivo:linha quando citar código.
+NÃO edite nada e NÃO rode comandos — você só tem ferramentas de leitura. Baseie-se no MAPA abaixo e, se faltar detalhe, leia o arquivo apontado antes de afirmar. Não invente. Não repita estas instruções na resposta.
+
+CONTEXTO DO PROJETO:
+{memoria_projeto}
+
+MAPA DO PROJETO (assinaturas + resumo de 1 linha por arquivo relevante):
+{mapa}`
+
 function montarSistema(memoria: string, plano: string, contexto: string): string {
   return SYSTEM_BASE.replace("{memoria_projeto}", memoria || "(sem memória registrada)")
     .replace("{plano_execucao}", plano || "(sem plano — tarefa direta)")
@@ -118,7 +135,7 @@ function msgErro(e: unknown): string {
 }
 
 type Modelo = Parameters<typeof streamText>[0]["model"]
-type Toolset = typeof ferramentas & { concluir_passo?: ReturnType<typeof tool> }
+type Toolset = typeof ferramentas & { concluir_passo?: ReturnType<typeof fazerConcluirPasso> }
 
 type ResultadoPassada = {
   resposta: string
@@ -373,6 +390,86 @@ function ehComplexo(decisao: ReturnType<typeof rotear>): boolean {
   return decisao.modelo === MODELOS.loopLongo
 }
 
+const N_CANDIDATOS_TTC = 3
+
+type ResultadoTTC = { ok: boolean; texto: string; tokens: number; custoUSD: number }
+
+/**
+ * 3.4 — Test-time compute: o diagnóstico difícil (com comparação pareada) NÃO cravou na 1ª passada.
+ * Em vez de desistir, gera N candidatos EM PARALELO (raciocínio puro, sem efeito colateral) e
+ * SELECIONA POR VERIFICAÇÃO: aplica o fix de cada candidato (serial — mexe no disco) e roda o build;
+ * o primeiro que fecha VERDE ganha, os perdedores são revertidos (Backup). Só entra aqui (material
+ * com par) porque multiplica o custo. Cada candidato roda numa Camada 4 limpa (resetCamada4) pra os
+ * trackers de edição não contaminarem um attempt com o outro. O usuário vê só "Jade".
+ */
+async function tentarTestTimeCompute(
+  input: string,
+  openrouter: ReturnType<typeof provedor>,
+  ctx: { completo: string },
+): Promise<ResultadoTTC> {
+  const acR = new AbortController()
+  _abort = acR
+  ui.spinnerStart("Jade raciocinando")
+  let candidatos: Awaited<ReturnType<typeof gerarCandidatosDiagnostico>>
+  try {
+    const material = await reunirMaterial(input)
+    if (!material.pares.length) {
+      ui.spinnerStop()
+      _abort = null
+      return { ok: false, texto: "", tokens: 0, custoUSD: 0 }
+    }
+    candidatos = await gerarCandidatosDiagnostico(input, material, openrouter(MODELOS.diagnostico) as Modelo, N_CANDIDATOS_TTC, acR.signal)
+  } catch {
+    ui.spinnerStop()
+    _abort = null
+    return { ok: false, texto: "", tokens: 0, custoUSD: 0 }
+  }
+  ui.spinnerStop()
+  _abort = null
+
+  let tokens = 0
+  let custo = 0
+  for (const c of candidatos) {
+    tokens += c.inTok + c.outTok
+    custo += custoUSD(MODELOS.diagnostico, c.inTok, c.outTok)
+  }
+  if (!candidatos.length) return { ok: false, texto: "", tokens, custoUSD: custo }
+  logInterno(`test-time-compute: ${candidatos.length} candidatos, selecionando por verificação`)
+
+  const sistema = montarSistema(ctx.completo, "", "")
+  let marca = 0
+  const sel = await selecionarPorVerificacao(
+    candidatos.length,
+    async (i) => candidatos[i],
+    async (c) => {
+      resetCamada4()
+      definirEscopo(escopoDoDiagnostico(c.texto))
+      marca = Backup.tamanho()
+      const tarefaC = `A causa foi diagnosticada abaixo. Aplique a correção SOMENTE nos arquivos citados na causa: vá direto edição -> build. NÃO repita estas instruções; aja.\n\n${c.texto}`
+      const r = await executarPassada({
+        model: openrouter(MODELOS.execucao) as Modelo,
+        sistema,
+        toolset: ferramentas,
+        plano: [],
+        thinking: false,
+        passoRef: { atual: 0 },
+        extra: [{ role: "user" as const, content: tarefaC }],
+      })
+      tokens += r.inTok + r.outTok
+      custo += custoUSD(MODELOS.execucao, r.inTok, r.outTok)
+      if (r.abortado || r.erro) return false
+      const g = await rodarTestGate()
+      return g.estado === "verde"
+    },
+    async () => {
+      await Backup.reverterAte(marca)
+    },
+  )
+  return sel.vencedor
+    ? { ok: true, texto: sel.vencedor.texto, tokens, custoUSD: custo }
+    : { ok: false, texto: "", tokens, custoUSD: custo }
+}
+
 /**
  * Maestro — orquestração de tarefa complexa. Decompõe (modelo forte, 1 passada) em sub-objetivos e
  * roda CADA UM na máquina provada (diagnóstico opcional + execução + portão de build), com escopo e
@@ -509,20 +606,39 @@ export async function processar(input: string) {
   novaRodada()
   const ctx = await carregarContexto()
 
+  // 3.7 — roteamento index-first: o índice da Camada 1 (se já existe) confirma referências de código
+  // reais no input, de forma agnóstica de extensão. Sem índice, rotear cai no padrão. Leitura barata
+  // (JSON persistido, sem reprocessar arquivos).
+  const indiceRota = await carregarIndice(process.cwd())
+
   // 3.0 herança de contexto: seguimento curto depois de um diagnóstico que cravou aplica AQUELE
   // diagnóstico (execução guiada sobre o mastigado guardado), em vez de re-rotear input vazio.
   const heranca = pareceSeguimento(input) && Boolean(mastigadoAnterior())
   const decisao = heranca
     ? { modo: "execucao" as Modo, thinking: false, modelo: MODELOS.execucao, motivo: "heranca-diagnostico" }
-    : rotear(input)
+    : rotear(input, indiceRota ?? undefined)
   const { modo, thinking } = decisao
   let modoFinal: Modo = modo
   const conversa = modo === "conversa"
   logInterno(`rota motivo=${decisao.motivo} modo=${modo}`)
 
+  // 3.6 — input com intenções demais numa frase só: não roteia às cegas; pede pra quebrar.
+  if (decisao.pedirQuebra) {
+    ui.jade(rotuloModo(modo))
+    ui.aviso("essa tarefa junta várias intenções numa frase só.")
+    ui.subItem("manda uma de cada vez (ex: primeiro 'diagnostica X', depois 'corrige Y') que eu trato cada uma com a marcha certa.")
+    return
+  }
+
   // Conversa roda local e grátis no Ollama, quando disponível.
   if (conversa) {
     await processarConversa(input, ctx, decisao.modelo)
+    return
+  }
+
+  // Copiloto — COMPREENDER: explica/panorama. Modelo barato de contexto longo, read-only, não edita.
+  if (modo === "compreender") {
+    await processarCompreender(input, ctx, decisao.modelo)
     return
   }
 
@@ -554,6 +670,8 @@ export async function processar(input: string) {
   let tokensRaciocinio = 0
   let custoRaciocinio = 0
   let modelosDiag: string[] = []
+  // 1.5 — diagnóstico mastigado que cravou, guardado pra registrar o bug na memória se o build fechar.
+  let diagTexto: string | null = null
 
   if (modo === "diagnostico") {
     const d = await diagnosticarEMastigar(input, openrouter)
@@ -566,21 +684,49 @@ export async function processar(input: string) {
         ui.erro(msgErro(d.erro))
         return
       }
-      // naoCravou — NÃO manda lixo pra execução. Falha honesta ao usuário.
+      // naoCravou — 3.4 test-time compute antes de desistir: gera N candidatos em paralelo e aplica o
+      // que passa no build (seleção por verificação). Só fecha se UM verifica verde de verdade.
+      const ttc = await tentarTestTimeCompute(input, openrouter, ctx)
+      if (ttc.ok) {
+        const respostaTTC = `Cravei por verificação: gerei ${N_CANDIDATOS_TTC} hipóteses em paralelo e apliquei a que fechou o build.\n\n${ttc.texto}`
+        try {
+          await registrarBug(process.cwd(), montarRegistroBug(input, ttc.texto, arquivosEditados()))
+          logInterno("memoria: bug registrado (test-time-compute)")
+        } catch {
+          /* memória é auxiliar: não derruba o fluxo */
+        }
+        ui.linhaBranca()
+        ui.resposta(respostaTTC)
+        ui.linhaBranca()
+        ui.metricas(d.tokens + ttc.tokens, d.custoUSD + ttc.custoUSD, d.ms)
+        await registrarTarefa({
+          modo,
+          modelo: `${d.modelos.join("→") || MODELOS.diagnostico}+ttc`,
+          thinking: true,
+          tokens: d.tokens + ttc.tokens,
+          custoUSD: d.custoUSD + ttc.custoUSD,
+          ms: d.ms,
+        })
+        historico.push({ role: "user", content: input })
+        historico.push({ role: "assistant", content: respostaTTC })
+        return
+      }
+      // nem o test-time compute fechou — NÃO manda lixo pra execução. Falha honesta ao usuário.
       ui.aviso("não cravei a causa com confiança.")
       ui.subItem("me aponta a direção (ex: 'olha no AraraPhoneNumberService') que eu vou direto.")
-      ui.metricas(d.tokens, d.custoUSD, d.ms)
+      ui.metricas(d.tokens + ttc.tokens, d.custoUSD + ttc.custoUSD, d.ms)
       await registrarTarefa({
         modo,
         modelo: d.modelos.join("→") || MODELOS.diagnostico,
         thinking: true,
-        tokens: d.tokens,
-        custoUSD: d.custoUSD,
+        tokens: d.tokens + ttc.tokens,
+        custoUSD: d.custoUSD + ttc.custoUSD,
         ms: d.ms,
       })
       return
     }
     tarefa = d.tarefa
+    diagTexto = d.texto
     modelosDiag = d.modelos
     tokensRaciocinio = d.tokens
     custoRaciocinio = d.custoUSD
@@ -645,7 +791,10 @@ export async function processar(input: string) {
   // 3.5 — reclassificação dinâmica: uma execução que NÃO editou nada e devolveu hedge era, na real,
   // um diagnóstico disfarçado. Pivota pro pipeline de diagnóstico (sem recomeçar) e executa o
   // mastigado. Se nem assim cravar, mantém a resposta honesta original.
-  if (deveReclassificarPraDiagnostico(modo, houveEdicao(), respostaFinal)) {
+  // 3.5 — só reclassifica se ainda há orçamento de troca de marcha (teto 3, ou o teto global 6 — o
+  // que vier primeiro). Estourou? Mantém a resposta honesta original em vez de oscilar de natureza.
+  if (deveReclassificarPraDiagnostico(modo, houveEdicao(), respostaFinal) && podeTrocarMarcha()) {
+    registrarTrocaMarcha()
     modoFinal = "diagnostico"
     logInterno("reclassificacao execucao->diagnostico")
     const d = await diagnosticarEMastigar(input, openrouter)
@@ -653,6 +802,7 @@ export async function processar(input: string) {
       tokensRaciocinio += d.tokens
       custoRaciocinio += d.custoUSD
       modelosDiag = d.modelos
+      diagTexto = d.texto
       registrarMastigado(d.tarefa)
       const rRe = await executarPassada({
         model: openrouter(MODELOS.execucao) as Modelo,
@@ -723,9 +873,12 @@ export async function processar(input: string) {
   // 4.1 TEST-GATE + 4.3-coerência (trajetória longa): se a tarefa editou código, o build do
   // subprojeto tocado PRECISA passar antes de aceitar. Vermelho => UMA passada de conserto guiada
   // (com instrução de só consertar, nada de edit novo). Determinístico: não depende do modelo lembrar.
+  let gateVerde = false
   if (precisaTestGate(houveEdicao())) {
     const g = await rodarTestGate()
-    if (g.estado === "ambiente") {
+    if (g.estado === "verde") {
+      gateVerde = true
+    } else if (g.estado === "ambiente") {
       respostaFinal = `${respostaFinal}\n\n[Jade] ${g.mensagem}`
     } else if (g.estado === "vermelho") {
       ui.aviso("build vermelho após a edição — consertando antes de fechar.")
@@ -754,11 +907,25 @@ export async function processar(input: string) {
         return
       }
       const g2 = await rodarTestGate()
-      if (g2.estado === "vermelho") {
+      if (g2.estado === "verde") {
+        gateVerde = true
+      } else if (g2.estado === "vermelho") {
         respostaFinal = `${respostaFinal}\n\n[Jade] o build ainda não está verde — não declaro pronto. ${INSTRUCAO_TRAJETORIA_LONGA}`
       } else if (g2.estado === "ambiente") {
         respostaFinal = `${respostaFinal}\n\n[Jade] ${g2.mensagem}`
       }
+    }
+  }
+
+  // 1.5 — fix de diagnóstico verificado (build verde): registra o bug resolvido na memória do projeto
+  // (sintoma -> causa raiz -> arquivo:linha -> correção). Alimenta buscarPrecedente nas próximas tarefas.
+  // Degrada com graça: memória é serviço auxiliar — falhar aqui NÃO derruba a tarefa que já fechou.
+  if (gateVerde && modoFinal === "diagnostico" && diagTexto) {
+    try {
+      await registrarBug(process.cwd(), montarRegistroBug(input, diagTexto, arquivosEditados()))
+      logInterno("memoria: bug registrado")
+    } catch (e) {
+      logInterno(`memoria: falha ao registrar bug (${msgErro(e)})`)
     }
   }
 
@@ -897,6 +1064,109 @@ async function processarConversa(input: string, ctx: { resumo: string }, modeloC
   historico.push({ role: "assistant", content: resposta })
 }
 
+/**
+ * Copiloto — COMPREENDER. Monta o MAPA AMPLO do projeto (Camada 2 modo amplo: assinaturas + resumos
+ * 1.4), dá ao modelo barato de contexto longo (thinking OFF) com ferramentas SÓ de leitura e pede uma
+ * explicação em PT-BR com arquivo:linha. Não edita, não roda comando. Fachada: "Jade · entendendo".
+ */
+async function processarCompreender(
+  input: string,
+  ctx: { completo: string },
+  modeloCloud: string,
+): Promise<void> {
+  let openrouter: ReturnType<typeof provedor>
+  try {
+    openrouter = provedor()
+  } catch (e) {
+    ui.jade("entendendo")
+    ui.erro((e as Error).message)
+    return
+  }
+  ui.jade("entendendo")
+  ui.spinnerStart("Jade entendendo")
+  const mapa = await montarMapaAmplo(process.cwd(), input, criarResumirFn())
+  const sistema = SYSTEM_COMPREENDER.replace("{memoria_projeto}", ctx.completo || "(sem memória registrada)").replace(
+    "{mapa}",
+    mapa.texto || "(índice vazio — leia os arquivos sob demanda)",
+  )
+  const toolsLeitura = {
+    ler_arquivo: ferramentas.ler_arquivo,
+    listar_arquivos: ferramentas.listar_arquivos,
+    buscar_no_projeto: ferramentas.buscar_no_projeto,
+  }
+  logInterno(`compreender modelo=${modeloCloud} arquivos=${mapa.arquivos.length}`)
+  historico.push({ role: "user", content: input })
+  const inicio = Date.now()
+
+  const ac = new AbortController()
+  _abort = ac
+  let erroCapturado: unknown = null
+  const result = streamText({
+    model: openrouter(modeloCloud) as Modelo,
+    system: sistema,
+    messages: historico.slice(-LIMITE_HISTORICO),
+    tools: toolsLeitura,
+    stopWhen: stepCountIs(LIMITE_INVESTIGACAO),
+    temperature: 0.3,
+    abortSignal: ac.signal,
+    onStepFinish: () => ui.spinnerStart("Jade entendendo"),
+    onError: ({ error }) => {
+      erroCapturado = error
+    },
+  })
+
+  const tty = Boolean(process.stdout.isTTY)
+  let resposta = ""
+  let comecou = false
+  try {
+    for await (const delta of result.textStream) {
+      resposta += delta
+      if (tty) {
+        if (!comecou) {
+          ui.spinnerStop()
+          ui.linhaBranca()
+          comecou = true
+        }
+        ui.streamAppend(delta)
+      }
+    }
+  } catch (e) {
+    if (!ac.signal.aborted) erroCapturado = e
+  }
+  ui.spinnerStop()
+  const abortado = ac.signal.aborted
+  _abort = null
+
+  if (abortado) {
+    finalizarAbort()
+    return
+  }
+  if (erroCapturado) {
+    ui.erro(msgErro(erroCapturado))
+    historico.pop()
+    return
+  }
+  if (resposta.trim()) {
+    if (tty) ui.streamCommit()
+    else {
+      ui.linhaBranca()
+      ui.resposta(resposta)
+    }
+  }
+  ui.linhaBranca()
+  let inTok = 0
+  let outTok = 0
+  try {
+    const u = (await result.usage) as { inputTokens?: number; outputTokens?: number; promptTokens?: number; completionTokens?: number }
+    inTok = u?.inputTokens ?? u?.promptTokens ?? 0
+    outTok = u?.outputTokens ?? u?.completionTokens ?? 0
+  } catch {}
+  const custo = custoUSD(modeloCloud, inTok, outTok)
+  ui.metricas(inTok + outTok, custo, Date.now() - inicio)
+  await registrarTarefa({ modo: "compreender", modelo: modeloCloud, thinking: false, tokens: inTok + outTok, custoUSD: custo, ms: Date.now() - inicio })
+  historico.push({ role: "assistant", content: resposta })
+}
+
 function finalizarAbort() {
   ui.linhaBranca()
   ui.aviso("cancelado")
@@ -908,6 +1178,7 @@ function finalizarAbort() {
 function rotuloModo(modo: string): string {
   if (modo === "diagnostico") return "diagnóstico"
   if (modo === "conversa") return "conversa"
+  if (modo === "compreender") return "entendendo"
   return "execução"
 }
 

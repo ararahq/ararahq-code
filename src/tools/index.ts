@@ -14,6 +14,8 @@ import {
   registrarCandidatoForaEscopo,
   registrarEdicao,
   edicaoRepetida,
+  contradizEdicaoAnterior,
+  acaoRepetida,
   contornoAmbiente,
 } from "../agent/camada4"
 
@@ -319,6 +321,8 @@ export const ferramentas = {
       }
       if (edicaoRepetida(caminho, ancora, novo))
         return `Você já fez exatamente esta edição em ${caminho} nesta tarefa. Não repita — verifique o resultado (rode o build) em vez de reeditar igual.`
+      if (contradizEdicaoAnterior(caminho, ancora, novo))
+        return `Essa edição DESFAZ uma mudança que você acabou de fazer em ${caminho} (flip-flop). Pare de oscilar: decida o valor certo de uma vez. Se realmente precisa reverter, explique o porquê ao usuário antes — não fique alternando.`
       const existe = await Bun.file(f).exists()
       let novoConteudo: string
       let removido = ""
@@ -339,7 +343,7 @@ export const ferramentas = {
       ui.diff(removido, novo)
       Backup.registrar(f, existe ? await Bun.file(f).text() : null)
       await Bun.write(f, novoConteudo)
-      registrarEdicao(caminho)
+      registrarEdicao(caminho, ancora ?? "", novo)
       return `${existe ? "editado" : "criado"}: ${caminho} (${novoConteudo.split("\n").length} linhas)`
     },
   }),
@@ -351,6 +355,10 @@ export const ferramentas = {
     inputSchema: z.object({ comando: z.string(), motivo: z.string() }),
     execute: async ({ comando, motivo }, opts) => {
       if (BLOQUEIOS.some((r) => r.test(comando))) return `comando bloqueado por segurança: ${comando}`
+      // 4.3 — ação repetida: o MESMO comando não-verificação já rodou nesta tarefa. Build/teste fica
+      // de fora (re-rodar após conserto é legítimo); um `ls`/`cat`/`find` repetido é loop sem progresso.
+      if (!ehVerificacao(comando) && acaoRepetida("rodar_comando", comando))
+        return `Você já rodou exatamente "${comando}" nesta tarefa e não é build/teste. Use o resultado anterior — não repita a mesma ação, avance pro próximo passo.`
       ui.toolAcao("rodar_comando", comando)
       if (PERIGOSOS.some((r) => r.test(comando))) {
         ui.motivo(motivo)

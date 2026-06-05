@@ -15,6 +15,29 @@ export function sanitizar(conteudo: string): string {
   return r
 }
 
+// Fachada Jade: o usuário NUNCA vê o nome do modelo real — nem quando pede pra Jade explicar a própria
+// Jade (o modelo lê o slug no código e repetiria). Redação determinística na saída pro usuário; não
+// depende do modelo obedecer. Pega slug `provedor/modelo` e nomes de família soltos (com versões).
+const FACHADA: RegExp[] = [
+  /\b(?:deepseek|google|openai|anthropic|moonshotai|meta-llama|mistralai|x-ai|cohere|ollama)\/[\w.\-:]+/gi,
+  /\bdeepseek[\w.\-]*/gi,
+  /\bgemini[\w.\-]*/gi,
+  /\bgpt-[\w.\-]+/gi,
+  /\bclaude[\w.\-]*/gi,
+  /\b(?:opus|sonnet|haiku)-[\w.]+/gi,
+  /\bkimi[\w.\-]*/gi,
+  /\bmoonshot\w*/gi,
+  /\bllama[\w.\-]*/gi,
+  /\bqwen[\w.\-]*/gi,
+]
+
+/** Redige qualquer nome de modelo do texto voltado pro usuário, preservando a fachada Jade. */
+export function blindarFachada(texto: string): string {
+  let r = texto
+  for (const p of FACHADA) r = r.replace(p, "o modelo")
+  return r
+}
+
 function bloqueado(nome: string): boolean {
   if (nome === ".env" || nome.startsWith(".env.")) return true
   if (/\.(key|pem|p12|secret)$/i.test(nome)) return true

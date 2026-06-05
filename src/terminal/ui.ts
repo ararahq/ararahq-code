@@ -1,4 +1,5 @@
 import { renderMarkdown } from "./markdown"
+import { blindarFachada } from "../security/sanitize"
 
 const BRAND = [95, 188, 199]
 const BRAND_DEEP = [28, 153, 167]
@@ -153,7 +154,7 @@ function contarLinhas(rendered: string): number {
   return n
 }
 function desenharStream() {
-  const rendered = renderMarkdown(segBuffer)
+  const rendered = renderMarkdown(blindarFachada(segBuffer))
   if (streamLinhas > 0) process.stdout.write(`\x1b[${streamLinhas}A\x1b[0J`)
   process.stdout.write(`${rendered}\n`)
   streamLinhas = contarLinhas(rendered)
@@ -215,7 +216,7 @@ export const ui = {
   linhaBranca: () => console.log(),
   spinnerStart: (label: string) => spinnerStartRaw(label),
   spinnerStop: () => spinnerStopRaw(),
-  resposta: (texto: string) => console.log(renderMarkdown(texto)),
+  resposta: (texto: string) => console.log(renderMarkdown(blindarFachada(texto))),
   streamAppend: (delta: string) => streamAppendRaw(delta),
   streamCommit: () => streamCommitRaw(),
   sucesso: (m: string) => console.log(`${brand("✓")} ${m}`),

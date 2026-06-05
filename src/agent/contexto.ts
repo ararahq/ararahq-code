@@ -1,7 +1,9 @@
+import { readdir } from "node:fs/promises"
 import { indexar, type Indice, buscarPrecedente, type Precedente } from "../conhecimento"
-import type { Simbolo } from "../conhecimento"
+import type { Simbolo, ArquivoSimbolos } from "../conhecimento"
+import { gerarResumos, type CacheResumos, type ResumirFn, type AlvoResumo } from "../conhecimento/resumos"
 import { listarFontes, type ArquivoFonte } from "../conhecimento/walk"
-import { extrairEntidades, ehGenerico, linguagensCitadas } from "../engine/marques"
+import { extrairEntidades, ehGenerico, perfilTermos, expandirDominio } from "../engine/marques"
 
 // Camada 2 — Montagem de Contexto (determinística, via índice da Camada 1).
 //
@@ -82,7 +84,9 @@ const RE_OP_REPO = /^findFirst|^findAll|^findBy|^find[A-Z]|save|delete|update/
  * divergência mora (resolveSender/assignSharedNumber). Num monorepo, contagem de nome sozinha enterra
  * o serviço backend sob telas de UI que citam "shared" — por isso o peso pesado vai pra ops+service.
  */
-function rankearFoco(indice: Indice, entidades: string[]): FocoCand[] {
+export type ModoFoco = "cirurgico" | "amplo"
+
+function rankearFoco(indice: Indice, entidades: string[], modo: ModoFoco = "cirurgico"): FocoCand[] {
   const cands: FocoCand[] = []
   for (const arq of indice.simbolos) {
     if (ehRepoInterface(arq.arquivo)) continue
@@ -104,15 +108,17 @@ function rankearFoco(indice: Indice, entidades: string[]): FocoCand[] {
       ruido: RE_RUIDO_FOCO.test(arq.arquivo),
     })
   }
-  return cands.sort((x, y) => scoreFoco(y) - scoreFoco(x))
+  return cands.sort((x, y) => scoreFoco(y, modo) - scoreFoco(x, modo))
 }
 
-function scoreFoco(c: FocoCand): number {
+function scoreFoco(c: FocoCand, modo: ModoFoco = "cirurgico"): number {
   let s = c.sementes
   if (c.nomeCasa) s += PESO_NOME_ARQUIVO
   if (c.service) s += PESO_SERVICE
   if (c.opsSemente > 0) s += PESO_OP_NA_SEMENTE
-  if (c.ruido) s += PESO_RUIDO
+  // Cirúrgico afunda ruído (UI/gen/teste) pra achar o ponto do bug. Amplo (compreender) NÃO penaliza:
+  // cobertura > precisão — o panorama quer ver as telas e o gerado também, não só o service.
+  if (c.ruido && modo === "cirurgico") s += PESO_RUIDO
   return s
 }
 
@@ -306,10 +312,15 @@ function renderTrechos(trechos: Trecho[]): string {
   return `TRECHOS CIRÚRGICOS (corpos dos métodos do par + vizinhança causal):\n\n${blocos.join("\n\n")}`
 }
 
-/** Mapa de 1 linha por símbolo relevante (assinatura). Orienta o modelo sem despejar arquivo inteiro. */
-function renderMapa(simbolos: Simbolo[]): string {
+/**
+ * Mapa de 1 linha por símbolo relevante (assinatura). Orienta o modelo sem despejar arquivo inteiro.
+ * 1.4 — na PRIMEIRA aparição de cada arquivo, anexa o resumo de 1 linha (gerado pelo modelo barato,
+ * cacheado) quando há um — dá "o que este arquivo faz" sem o código. Sem resumo, cai só na assinatura.
+ */
+function renderMapa(simbolos: Simbolo[], resumos: CacheResumos): string {
   if (!simbolos.length) return ""
   const vistos = new Set<string>()
+  const arquivosVistos = new Set<string>()
   const linhas: string[] = []
   for (const s of simbolos) {
     if (linhas.length >= MAX_MAPA) break
@@ -317,9 +328,29 @@ function renderMapa(simbolos: Simbolo[]): string {
     if (vistos.has(chave)) continue
     vistos.add(chave)
     const resumo = s.assinatura || `${s.tipo} ${s.nome}`
-    linhas.push(`- ${s.arquivo}:${s.linhaInicio}  ${resumo}`)
+    let linha = `- ${s.arquivo}:${s.linhaInicio}  ${resumo}`
+    if (!arquivosVistos.has(s.arquivo)) {
+      arquivosVistos.add(s.arquivo)
+      const r = resumos[s.arquivo]?.resumo
+      if (r) linha += `\n    (${s.arquivo}: ${r})`
+    }
+    linhas.push(linha)
   }
   return `MAPA (símbolos relevantes ao sintoma):\n${linhas.join("\n")}`
+}
+
+/** Monta os alvos de resumo (1.4) dos arquivos-foco: lê conteúdo + hash pra gerarResumos cachear. */
+async function alvosResumo(raiz: string, arquivos: string[]): Promise<AlvoResumo[]> {
+  const out: AlvoResumo[] = []
+  for (const arquivo of arquivos) {
+    try {
+      const conteudo = await Bun.file(`${raiz}/${arquivo}`).text()
+      out.push({ arquivo, hash: Bun.hash(conteudo).toString(16), conteudo })
+    } catch {
+      // arquivo ilegível: ignora — o mapa cai na assinatura pra ele
+    }
+  }
+  return out
 }
 
 /** Renderiza os precedentes da memória (1.5) que casam o sintoma. Vazio se não houver. */
@@ -350,12 +381,25 @@ export type PacoteContexto = {
   escopado: boolean
 }
 
-const MAX_ARQ_SUPERFICIE = 24
+const MAX_ARQ_SUPERFICIE = 32
 const MAX_LINHAS_SUPERFICIE = 90
-const MAX_CHARS_SUPERFICIE = 13_000
+const MAX_CHARS_SUPERFICIE = 24_000
+const MIN_TOKEN_ESCOPO = 3
+const MIN_ANALOGOS_CROSS = 3
 
-// Arquivos que mais provavelmente contêm o bug de um SDK (config/cliente/http/base/entrypoint) vêm
-// primeiro na superfície; testes por último. Resolve os bugs "scan-de-literal" (base_url, import morto).
+/** Quantos basenames os dois subtrees compartilham — mede se são PARES (SDKs irmãos) vs coisas díspares. */
+function analogosCompartilhados(fontes: ArquivoFonte[], a: string, b: string): number {
+  const bn = (st: string) =>
+    new Set(fontes.filter((f) => f.caminho.startsWith(`${st}/`)).map((f) => basenameSemExt(f.caminho)))
+  const bnA = bn(a)
+  const bnB = bn(b)
+  let n = 0
+  for (const x of bnA) if (bnB.has(x)) n++
+  return n
+}
+
+// Arquivos que mais provavelmente contêm o bug (config/cliente/http/base/entrypoint) vêm primeiro;
+// testes por último. Resolve os bugs "scan-de-literal" (base_url, import morto) sem depender de linguagem.
 const RE_ARQUIVO_PRIORITARIO = /\b(config|settings|client|http|base|index|resources?|api|connection|conn|setup|constants|main)\b|__init__/i
 const RE_ARQUIVO_TESTE = /test|spec|__tests__|\.test\.|\.spec\./i
 
@@ -367,59 +411,148 @@ function prioridadeArquivo(caminho: string): number {
   return p
 }
 
-function repoDe(caminho: string): string {
-  const i = caminho.indexOf("/")
-  return i < 0 ? caminho : caminho.slice(0, i)
+function basenameSemExt(caminho: string): string {
+  const base = caminho.split("/").pop() ?? caminho
+  const i = base.lastIndexOf(".")
+  return (i > 0 ? base.slice(0, i) : base).toLowerCase()
 }
 
 /**
- * Superfície escopada: o sintoma cita uma linguagem mas o índice não casou um ponto preciso (bug de
- * literal/config sem símbolo que case o sintoma). Em vez de devolver lixo, entrega o SDK PEQUENO
- * INTEIRO daquela linguagem pro modelo escanear — "ver todos os arquivos da pasta", não só os que
- * casam por nome. Acha o subtree (repo com mais arquivos da linguagem, preferindo nome que a cita),
- * lê os fontes (capados, prioritários primeiro, testes por último). null se não houver nada.
+ * Escopos citados — AGNÓSTICO de linguagem. Casa os tokens do sintoma contra a ÁRVORE REAL do
+ * projeto (nomes de pasta), não contra uma lista de linguagens. "python" escopa porque existe
+ * `arara-python-sdk` e o token bate; `auth`/`billing`/`zig-sdk` num projeto qualquer funcionam igual,
+ * sem nada chumbado. Devolve até 2 subtrees (caminho relativo) — 2 = cross-compare ("X quebra, Y ok").
+ * Ordenado pela posição no texto (o sujeito da queixa primeiro). Vazio se nenhum token casar a árvore.
+ */
+export async function escoposCitados(raiz: string, input: string, fontes: ArquivoFonte[]): Promise<string[]> {
+  const baixo = input.toLowerCase()
+  const tokens = [...new Set(extrairEntidades(input).map((t) => t.toLowerCase()).filter((t) => t.length >= MIN_TOKEN_ESCOPO))]
+  if (!tokens.length) return []
+
+  const subtrees = new Set<string>()
+  for (const f of fontes) {
+    const segs = f.caminho.split("/")
+    if (segs.length >= 2) subtrees.add(segs[0])
+    if (segs.length >= 3) subtrees.add(`${segs[0]}/${segs[1]}`)
+  }
+
+  const cands: { st: string; score: number; pos: number }[] = []
+  for (const st of subtrees) {
+    const segs = st.toLowerCase().split(/[/\-_.]/).filter((s) => s.length >= 3)
+    let score = 0
+    let pos = Infinity
+    for (const tok of tokens) {
+      // só "o segmento da pasta contém o token" — NÃO o contrário, senão "cliente" casa "cli".
+      if (segs.some((s) => s.includes(tok))) {
+        score++
+        pos = Math.min(pos, baixo.indexOf(tok))
+      }
+    }
+    if (score > 0) cands.push({ st, score, pos })
+  }
+  if (!cands.length) return []
+  // mais tokens casados primeiro; empate -> caminho MAIS CURTO (o repo vence o subdir, pra cross-compare
+  // ser repo-vs-repo e o manifesto da raiz entrar); depois posição no texto.
+  cands.sort((a, b) => b.score - a.score || a.st.length - b.st.length || a.pos - b.pos)
+
+  const escolhidos: { st: string; pos: number }[] = []
+  for (const c of cands) {
+    if (escolhidos.some((e) => c.st.startsWith(`${e.st}/`) || e.st.startsWith(`${c.st}/`))) continue
+    escolhidos.push({ st: c.st, pos: c.pos })
+    if (escolhidos.length >= 2) break
+  }
+  const ordenados = escolhidos.sort((a, b) => a.pos - b.pos).map((e) => e.st)
+  // cross-compare só entre PARES (SDKs irmãos, com arquivos análogos suficientes). Senão — ex.: SDK
+  // pequeno casado junto com o backend gigante por causa de um token genérico ("api") — escopa só no
+  // primeiro citado (o sujeito da queixa), pra não comparar coisas díspares nem estourar o orçamento.
+  if (ordenados.length === 2 && analogosCompartilhados(fontes, ordenados[0], ordenados[1]) < MIN_ANALOGOS_CROSS) {
+    return [ordenados[0]]
+  }
+  return ordenados
+}
+
+/** Arquivos de texto pequenos na RAIZ de um subtree (manifestos: pyproject/package.json/go.mod/etc),
+ * agnóstico — pega o que estiver lá, sem lista chumbada. É o ponto C: deixa o modelo ver a versão/contrato. */
+async function manifestosDaRaiz(raiz: string, st: string): Promise<string[]> {
+  try {
+    const entradas = await readdir(`${raiz}/${st}`, { withFileTypes: true })
+    return entradas.filter((e) => e.isFile()).map((e) => `${st}/${e.name}`)
+  } catch {
+    return []
+  }
+}
+
+/**
+ * Superfície escopada: o sintoma aponta um (ou dois) subtree e o índice não casou um ponto preciso.
+ * Em vez de lixo, entrega o subtree PEQUENO INTEIRO pro modelo escanear — "ver todos os arquivos da
+ * pasta". Inclui os MANIFESTOS da raiz (C: versão/contrato à vista). Com DOIS subtrees vira
+ * COMPARAÇÃO (A): prioriza os arquivos análogos (mesmo basename nos dois) e marca pra o modelo achar
+ * o que DIVERGE — é o par cross-repo, o ponto forte da arquitetura aplicado a SDKs. Agnóstico.
  */
 async function superficieEscopada(
   raiz: string,
-  lang: string,
-  exts: string[],
+  subtrees: string[],
+  fontes: ArquivoFonte[],
+  input: string,
 ): Promise<{ texto: string; arquivos: string[] } | null> {
-  const naLingua = (await listarFontes(raiz)).filter((f) => exts.some((e) => f.caminho.endsWith(e)))
-  if (!naLingua.length) return null
+  const grupos = subtrees
+    .map((st) => ({ st, arqs: fontes.filter((f) => f.caminho === st || f.caminho.startsWith(`${st}/`)) }))
+    .filter((g) => g.arqs.length)
+  if (!grupos.length) return null
 
-  const porRepo = new Map<string, ArquivoFonte[]>()
-  for (const f of naLingua) {
-    const r = repoDe(f.caminho)
-    porRepo.set(r, [...(porRepo.get(r) ?? []), f])
+  const tokens = [...new Set(extrairEntidades(input).map((t) => t.toLowerCase()).filter((t) => t.length >= 3))]
+  // arquivo cujo NOME casa um token do sintoma ("template" -> Templates.php) é o suspeito nº1.
+  const bonusToken = (caminho: string) => (tokens.some((t) => basenameSemExt(caminho).includes(t)) ? 15 : 0)
+
+  const cross = grupos.length >= 2
+  const contagem = new Map<string, number>()
+  if (cross) {
+    for (const g of grupos) {
+      for (const bn of new Set(g.arqs.map((a) => basenameSemExt(a.caminho)))) {
+        contagem.set(bn, (contagem.get(bn) ?? 0) + 1)
+      }
+    }
   }
-  const [, arquivosRepo] = [...porRepo.entries()].sort(
-    (a, b) =>
-      (b[0].toLowerCase().includes(lang) ? 1 : 0) - (a[0].toLowerCase().includes(lang) ? 1 : 0) ||
-      b[1].length - a[1].length,
-  )[0]
-
-  const ordenados = arquivosRepo
-    .sort((a, b) => prioridadeArquivo(b.caminho) - prioridadeArquivo(a.caminho) || a.bytes - b.bytes)
-    .slice(0, MAX_ARQ_SUPERFICIE)
+  const bonusAnalogo = (caminho: string) => ((contagem.get(basenameSemExt(caminho)) ?? 0) >= 2 ? 30 : 0)
+  // Manifesto entra com peso médio (vê versão/contrato) mas NÃO atropela o arquivo do bug (token/config).
+  const score = (caminho: string, manifesto: boolean) =>
+    (manifesto ? 8 : prioridadeArquivo(caminho)) + bonusToken(caminho) + bonusAnalogo(caminho)
 
   const blocos: string[] = []
   const arquivos: string[] = []
+  const vistos = new Set<string>()
   let chars = 0
-  for (const f of ordenados) {
-    if (chars >= MAX_CHARS_SUPERFICIE) break
-    try {
-      const linhas = (await Bun.file(`${raiz}/${f.caminho}`).text()).split("\n").slice(0, MAX_LINHAS_SUPERFICIE)
-      const numeradas = linhas.map((l, i) => `${i + 1}\t${l}`).join("\n")
-      blocos.push(`### ${f.caminho}\n${numeradas}`)
-      arquivos.push(f.caminho)
-      chars += numeradas.length
-    } catch {
-      // arquivo ilegível: ignora
+  const capPorGrupo = Math.floor(MAX_CHARS_SUPERFICIE / grupos.length)
+
+  for (const g of grupos) {
+    const manifestos = (await manifestosDaRaiz(raiz, g.st)).map((caminho) => ({ caminho, manifesto: true }))
+    const fontesC = g.arqs.map((a) => ({ caminho: a.caminho, manifesto: false }))
+    const ordenados = [...manifestos, ...fontesC]
+      .sort((a, b) => score(b.caminho, b.manifesto) - score(a.caminho, a.manifesto))
+      .slice(0, MAX_ARQ_SUPERFICIE)
+    if (cross) blocos.push(`===== ${g.st} =====`)
+    let charsGrupo = 0
+    for (const { caminho } of ordenados) {
+      if (chars >= MAX_CHARS_SUPERFICIE || charsGrupo >= capPorGrupo) break
+      if (vistos.has(caminho)) continue
+      vistos.add(caminho)
+      try {
+        const linhas = (await Bun.file(`${raiz}/${caminho}`).text()).split("\n").slice(0, MAX_LINHAS_SUPERFICIE)
+        const numeradas = linhas.map((l, i) => `${i + 1}\t${l}`).join("\n")
+        blocos.push(`### ${caminho}\n${numeradas}`)
+        arquivos.push(caminho)
+        chars += numeradas.length
+        charsGrupo += numeradas.length
+      } catch {
+        // arquivo ilegível: ignora
+      }
     }
   }
-  if (!blocos.length) return null
-  const texto = `CÓDIGO DO SDK DE ${lang.toUpperCase()} (o ponto do sintoma ESTÁ aqui dentro — escaneie e aponte arquivo:linha):\n\n${blocos.join("\n\n")}`
-  return { texto, arquivos }
+  if (!arquivos.length) return null
+  const cab = cross
+    ? "COMPARE os dois ecossistemas abaixo — um funciona, o outro tem o bug. O ponto onde DIVERGEM é a causa. Aponte arquivo:linha:"
+    : "CÓDIGO ESCOPADO (o ponto do sintoma ESTÁ aqui dentro — escaneie e aponte arquivo:linha):"
+  return { texto: `${cab}\n\n${blocos.join("\n\n")}`, arquivos }
 }
 
 /**
@@ -469,14 +602,94 @@ function alvosDeTrecho(
   return alvos
 }
 
+// --- Retrieval por TERMOS (Marques) — a ponte sintoma-leigo -> arquivo, determinística e grátis ----
+
+const MAX_FOCO_TERMOS = 6
+
+/** Superfície de busca de um arquivo (sem reler do disco): caminho + nomes de símbolo + assinaturas. */
+function textoIndexadoDoArquivo(a: ArquivoSimbolos): string {
+  const simbolos = a.simbolos.map((s) => `${s.nome} ${s.assinatura}`).join(" ")
+  return `${a.arquivo.replace(/[/.]/g, " ")} ${simbolos}`
+}
+
 /**
- * Monta o pacote de contexto do diagnóstico SEM chamar LLM, via índice da Camada 1. Garante o índice
- * fresco (incremental, barato), resolve sementes pelo reverso, pareia por grafo, extrai os corpos
- * cirúrgicos e injeta precedentes da memória. `forte` indica se o índice resolveu o bastante; quando
- * fraco, quem chama degrada pro gather antigo por grep. Determinístico e reusável: o mesmo pacote
- * alimenta todos os modelos da cadeia de fallback sem recomputar I/O.
+ * Ranqueia os arquivos do índice por relevância ao sintoma usando o Marques: casa os termos do
+ * pedido (expandidos via ponte de domínio PT→EN, aterrada no vocabulário REAL do projeto) contra o
+ * perfil de frequência de cada arquivo. É o caminho que acha o arquivo quando o nome do símbolo NÃO
+ * casa a palavra do leigo ("recarga/saldo" -> addCredit). Zero token. Penaliza ruído (UI/test/gen).
  */
-export async function montarPacote(raiz: string, input: string): Promise<PacoteContexto> {
+function rankearPorTermos(indice: Indice, queryTokens: string[]): { arquivo: string; score: number }[] {
+  const vocab = new Set<string>()
+  const perfis = indice.simbolos.map((a) => {
+    // Perfil do CONTEÚDO (indexado na Camada 1) — pega constante/config/valor que o nome de símbolo
+    // não tem. Cai pro perfil de símbolos só se o índice for antigo (sem termos de conteúdo).
+    const conteudo = indice.termos[a.arquivo]
+    const perfil = conteudo?.length ? new Map(conteudo) : perfilTermos(textoIndexadoDoArquivo(a))
+    for (const k of perfil.keys()) vocab.add(k)
+    return { arquivo: a.arquivo, perfil }
+  })
+  const q = expandirDominio(queryTokens, vocab).filter((t) => t.length >= MIN_TOKEN_ESCOPO)
+  if (!q.length) return []
+
+  const out: { arquivo: string; score: number }[] = []
+  for (const { arquivo, perfil } of perfis) {
+    let score = 0
+    for (const t of q) {
+      for (const [termo, f] of perfil) {
+        if (termo === t || termo.includes(t) || t.includes(termo)) {
+          score += f
+          break
+        }
+      }
+    }
+    if (score <= 0) continue
+    if (RE_RUIDO_FOCO.test(arquivo)) score -= 3
+    out.push({ arquivo, score })
+  }
+  return out.sort((x, y) => y.score - x.score)
+}
+
+/** Despeja o conteúdo dos arquivos escolhidos pelo retrieval (cap de linhas/chars). O modelo lê e
+ * aponta arquivo:linha. Usado quando o índice não montou par nem subtree, mas os termos acharam alvo. */
+async function superficieDeArquivos(
+  raiz: string,
+  arquivos: string[],
+): Promise<{ texto: string; arquivos: string[] } | null> {
+  const blocos: string[] = []
+  const usados: string[] = []
+  let chars = 0
+  for (const caminho of arquivos.slice(0, MAX_ARQ_SUPERFICIE)) {
+    if (chars >= MAX_CHARS_SUPERFICIE) break
+    try {
+      const linhas = (await Bun.file(`${raiz}/${caminho}`).text()).split("\n").slice(0, MAX_LINHAS_SUPERFICIE)
+      const numeradas = linhas.map((l, i) => `${i + 1}\t${l}`).join("\n")
+      blocos.push(`### ${caminho}\n${numeradas}`)
+      usados.push(caminho)
+      chars += numeradas.length
+    } catch {
+      // arquivo ilegível: ignora
+    }
+  }
+  if (!usados.length) return null
+  return {
+    texto: `CÓDIGO RELEVANTE (selecionado por frequência de termos — o ponto do sintoma ESTÁ aqui, aponte arquivo:linha):\n\n${blocos.join("\n\n")}`,
+    arquivos: usados,
+  }
+}
+
+/**
+ * Monta o pacote de contexto do diagnóstico via índice da Camada 1. Garante o índice fresco
+ * (incremental, barato), resolve sementes pelo reverso, pareia por grafo, extrai os corpos cirúrgicos
+ * e injeta precedentes da memória. `forte` indica se o índice resolveu o bastante; quando fraco, quem
+ * chama degrada pro gather antigo por grep. Reusável: o mesmo pacote alimenta todos os modelos da
+ * cadeia de fallback sem recomputar I/O. O ÚNICO toque de modelo é 1.4 (resumo BARATO de 1 linha por
+ * arquivo-foco, cacheado por hash — 1x por arquivo) quando `resumir` é passado; sem ele, lê só o cache.
+ */
+export async function montarPacote(
+  raiz: string,
+  input: string,
+  resumir: ResumirFn | null = null,
+): Promise<PacoteContexto> {
   const entidades = entidadesEspecificas(input)
   const indice = await indexar(raiz)
   const precedentes = await buscarPrecedente(raiz, input)
@@ -485,12 +698,13 @@ export async function montarPacote(raiz: string, input: string): Promise<PacoteC
     return pacoteFraco(entidades, precedentes)
   }
 
-  // Escopo por linguagem: se o sintoma cita um ecossistema ("a lib de python", "no php"), restringe a
-  // busca aos arquivos daquele ecossistema. Usa só a PRIMEIRA linguagem citada (o sujeito da queixa) —
-  // num contraste "python quebra, node funciona", escopar pro node também puxaria de volta o lixo .ts.
-  const langs = linguagensCitadas(input)
-  const exts = langs[0]?.exts ?? []
-  const noEscopo = (arquivo: string) => exts.length === 0 || exts.some((e) => arquivo.endsWith(e))
+  // Escopo AGNÓSTICO por árvore real: casa os tokens do sintoma contra as pastas que existem ("python"
+  // -> arara-python-sdk; "auth" -> pasta auth; sem lista de linguagens). Restringe a busca ao(s)
+  // subtree(s) citado(s) — dois = comparação cross-repo ("X quebra, Y funciona").
+  const fontes = await listarFontes(raiz)
+  const subtrees = await escoposCitados(raiz, input, fontes)
+  const noEscopo = (arquivo: string) =>
+    subtrees.length === 0 || subtrees.some((st) => arquivo === st || arquivo.startsWith(`${st}/`))
 
   const sementes = resolverSementes(indice, entidades).filter((s) => noEscopo(s.arquivo))
   // Foco rankeado por relevância de domínio (service backend + operação no grafo > telas de UI que
@@ -505,11 +719,11 @@ export async function montarPacote(raiz: string, input: string): Promise<PacoteC
   const chamadas = chamadasDeOperacao(indice, foco)
   const pares = parearPorGrafo(chamadas, entidades)
 
-  // Sem par preciso, mas o sintoma cita uma linguagem? Entrega o SDK pequeno INTEIRO (superfície
-  // escopada) pro modelo escanear — resolve o bug de literal/config que não casa símbolo por nome
-  // (base_url errado, import morto). É contexto bom (forte) mas não é o par (escopado).
-  if (pares.length === 0 && langs.length > 0) {
-    const sup = await superficieEscopada(raiz, langs[0].lang, exts)
+  // Sem par preciso, mas o sintoma aponta um subtree? Entrega o subtree pequeno INTEIRO (superfície
+  // escopada) pro modelo escanear — resolve bug de literal/config sem símbolo (base_url, import morto),
+  // e com DOIS subtrees vira comparação cross-repo. Contexto bom (forte), mas não é o par (escopado).
+  if (pares.length === 0 && subtrees.length > 0) {
+    const sup = await superficieEscopada(raiz, subtrees, fontes, input)
     if (sup) {
       return {
         entidades,
@@ -525,12 +739,40 @@ export async function montarPacote(raiz: string, input: string): Promise<PacoteC
     }
   }
 
+  // Retrieval por TERMOS (Marques): nenhum par e o casamento estrito de NOME não achou foco. Casa o
+  // sintoma (expandido pela ponte de domínio, aterrada no vocab) contra o perfil de cada arquivo —
+  // acha o alvo quando a palavra do leigo não bate o nome do símbolo ("recarga/saldo" -> addCredit).
+  // Zero token. Entrega a superfície dos top-N pro modelo escanear e apontar arquivo:linha.
+  if (pares.length === 0 && focoLista.length === 0) {
+    const ranqueados = rankearPorTermos(indice, extrairEntidades(input))
+      .filter((r) => noEscopo(r.arquivo))
+      .slice(0, MAX_FOCO_TERMOS)
+    if (ranqueados.length) {
+      const sup = await superficieDeArquivos(raiz, ranqueados.map((r) => r.arquivo))
+      if (sup) {
+        return {
+          entidades,
+          simbolosCasados: sementes.length,
+          arquivosFoco: sup.arquivos,
+          pares: [],
+          trechos: [],
+          precedentes,
+          texto: sup.texto,
+          forte: true,
+          escopado: true,
+        }
+      }
+    }
+  }
+
   const rotulo = entidades.find((e) => TERMOS_SHARED.includes(e)) ?? entidades[0] ?? "a entidade"
   const mapaSimbolos = simbolosDoMapa(indice, sementes, pares, foco)
+  // 1.4 — resumos de 1 linha dos arquivos-foco (cacheados por hash; só gera no cache miss e se há fn).
+  const resumos = await gerarResumos(raiz, await alvosResumo(raiz, focoLista), resumir)
   const trechos = await extrairTrechos(raiz, alvosDeTrecho(indice, sementes, pares, foco))
 
   const blocos = [
-    renderMapa(mapaSimbolos),
+    renderMapa(mapaSimbolos, resumos),
     renderPares(pares, rotulo),
     renderTrechos(trechos),
     renderPrecedentes(precedentes),
@@ -567,4 +809,52 @@ function pacoteFraco(entidades: string[], precedentes: Precedente[]): PacoteCont
     forte: false,
     escopado: false,
   }
+}
+
+const MAX_ARQUIVOS_AMPLO = 20
+const MAX_SIMBOLOS_POR_ARQ = 6
+
+export type MapaAmplo = { texto: string; arquivos: string[] }
+
+/** Arquivos com mais símbolos (os "centrais") — panorama quando nenhuma entidade do pedido casa. */
+function arquivosCentrais(indice: Indice): string[] {
+  return [...indice.simbolos]
+    .filter((a) => a.simbolos.length > 0)
+    .sort((x, y) => y.simbolos.length - x.simbolos.length)
+    .map((a) => a.arquivo)
+}
+
+/**
+ * Camada 2 em modo AMPLO (copiloto — COMPREENDER): em vez do trecho cirúrgico do bug, monta um
+ * PANORAMA — muitos arquivos relevantes com suas assinaturas + o resumo de 1 linha (1.4, cacheado).
+ * Cobertura sobre precisão, SEM corpos (compreender é volume de leitura, não insight). Alimenta o
+ * modelo barato de contexto longo. Sem entidade casando ("visão geral do projeto"), cai pros arquivos
+ * com mais símbolos. Determinístico; o único toque de modelo é o resumo barato (via `resumir`), cacheado.
+ */
+export async function montarMapaAmplo(
+  raiz: string,
+  input: string,
+  resumir: ResumirFn | null = null,
+): Promise<MapaAmplo> {
+  const indice = await indexar(raiz)
+  const entidades = extrairEntidades(input)
+  const ranqueados = entidades.length ? rankearFoco(indice, entidades, "amplo").map((c) => c.arquivo) : []
+  const arquivos = (ranqueados.length ? ranqueados : arquivosCentrais(indice)).slice(0, MAX_ARQUIVOS_AMPLO)
+  const resumos = await gerarResumos(raiz, await alvosResumo(raiz, arquivos), resumir)
+
+  const blocos: string[] = []
+  for (const arq of arquivos) {
+    const def = indice.simbolos.find((a) => a.arquivo === arq)
+    if (!def) continue
+    const r = resumos[arq]?.resumo
+    const cab = r ? `### ${arq} — ${r}` : `### ${arq}`
+    const simbolos = def.simbolos
+      .slice(0, MAX_SIMBOLOS_POR_ARQ)
+      .map((s) => `  ${s.linhaInicio}: ${s.assinatura || `${s.tipo} ${s.nome}`}`)
+    blocos.push([cab, ...simbolos].join("\n"))
+  }
+  const texto = blocos.length
+    ? `MAPA DO PROJETO (arquivos relevantes — assinaturas + resumo de 1 linha):\n\n${blocos.join("\n\n")}`
+    : ""
+  return { texto, arquivos }
 }

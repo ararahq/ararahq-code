@@ -1,5 +1,7 @@
+import { pareceReferenciaCodigo, extrairArquivosCitados, type IndiceParaRef } from "./refcodigo"
+
 export type Complexidade = "simples" | "media" | "alta"
-export type Modo = "conversa" | "execucao" | "diagnostico"
+export type Modo = "conversa" | "execucao" | "diagnostico" | "compreender"
 
 const STOPWORDS = new Set([
   "a", "o", "e", "de", "do", "da", "que", "se", "por", "para", "com", "como",
@@ -40,8 +42,6 @@ const VERBOS_ACAO = [
   "renomeia", "move", "instala", "configura",
 ]
 
-const REF_CODIGO = /[\w./-]+\.(kt|kts|java|ts|tsx|js|jsx|py|go|rs|sql|json|ya?ml|md)\b|[A-Z]\w*(Exception|Error)\b|\b\w+\(/
-
 export function classificar(input: string): Complexidade {
   const i = input.toLowerCase()
   if (SINAIS_ALTA.some((s) => i.includes(s))) return "alta"
@@ -56,14 +56,24 @@ const SOBRE = [
   "o que voce pode", "o que você pode", "como voce funciona", "como você funciona",
 ]
 
-export function ehConversa(input: string): boolean {
-  if (REF_CODIGO.test(input)) return false
+export function ehConversa(input: string, indice?: IndiceParaRef): boolean {
+  if (pareceReferenciaCodigo(input, indice)) return false
   const low = input.toLowerCase()
   if (SOBRE.some((s) => low.includes(s))) return true
   if (VERBOS_ACAO.some((v) => low.includes(v))) return false
   const palavras = low.trim().split(/\s+/).filter(Boolean).length
   return palavras <= 6 && SAUDACOES.some((s) => low.includes(s))
 }
+
+// Copiloto — COMPREENDER: pedido de explicação/panorama do código. Volume de leitura, não insight.
+// Distinto de diagnóstico (sintoma/causa) e execução (mudança): aqui o usuário quer ENTENDER.
+const SINAIS_COMPREENDER = [
+  "o que faz", "o que esse", "o que essa", "o que este", "como funciona", "como esse", "como essa",
+  "me explica o fluxo", "explica o fluxo", "entende esse", "entenda esse", "resume", "resumo",
+  "o que é esse projeto", "o que é este projeto", "como esse módulo", "como este modulo", "panorama",
+  "visão geral", "visao geral", "lê a doc", "leia a documentação", "leia a documentacao",
+  "o que tem em", "me situa", "onde fica a lógica de", "onde fica a logica de", "me mostra como",
+]
 
 // Eixo 1 — thinking ON. Sintoma sem causa apontada: o agente precisa descobrir.
 const SINAIS_DIAGNOSTICO = [
@@ -95,23 +105,68 @@ const SINAIS_EXECUCAO = [
  * - execucao: instrução pronta -> thinking OFF (modelo barato e rápido).
  * Regra de desempate: cita arquivo+método+mudança exata -> execução; senão classificar()=="alta" -> diagnóstico.
  */
-export function decidirModo(input: string): Modo {
-  if (ehConversa(input)) return "conversa"
+export function decidirModo(input: string, indice?: IndiceParaRef): Modo {
+  if (ehConversa(input, indice)) return "conversa"
   const i = input.toLowerCase()
 
-  const temDiagnostico = SINAIS_DIAGNOSTICO.some((s) => i.includes(s))
   const temExecucao = SINAIS_EXECUCAO.some((s) => i.includes(s))
+  // Copiloto — COMPREENDER vem antes de diagnosticar/executar: "me explica como funciona X" é entender,
+  // não mexer. O verbo de explicação ganha do de ação só quando NÃO há instrução de mudança no código.
+  if (SINAIS_COMPREENDER.some((s) => i.includes(s)) && !temExecucao) return "compreender"
+
+  const temDiagnostico = SINAIS_DIAGNOSTICO.some((s) => i.includes(s))
 
   // Instrução cirúrgica explícita (verbo de ação + alvo nomeado) vence: é execução, sem thinking.
   if (temExecucao && !temDiagnostico) return "execucao"
   if (temDiagnostico && !temExecucao) return "diagnostico"
   if (temDiagnostico && temExecucao) {
     // Ambíguo: se aponta um arquivo/símbolo concreto, é execução; senão investiga.
-    return REF_CODIGO.test(input) ? "execucao" : "diagnostico"
+    return pareceReferenciaCodigo(input, indice) ? "execucao" : "diagnostico"
   }
 
   // Nenhum sinal claro: cai no classificador de complexidade.
   return classificar(input) === "alta" ? "diagnostico" : "execucao"
+}
+
+// 3.6 — Verbos de CORREÇÃO (aplicar mudança). Distinto de SINAIS_EXECUCAO (instrução cirúrgica com
+// alvo): aqui é "arruma/conserta/cria a correção" — o lado de EXECUÇÃO de uma tarefa composta.
+const VERBOS_CORRECAO = [
+  "corrige", "conserta", "arruma", "cria", "criar", "implementa", "implementar", "adiciona",
+  "adicionar", "aplica", "ajusta", "refatora", "escreve", "escreva", "troca", "substitui",
+  "remove", "deleta", "move", "renomeia", "atualiza", "gera", "correção", "correcao",
+]
+
+// Conector que liga duas intenções sequenciais ("diagnostica X E corrige", "acha a causa, depois
+// arruma"). Non-capturing pra `split` não devolver os delimitadores. `\be\b` não casa dentro de "de".
+const RE_CONECTOR_COMPOSTA = /\b(?:e|depois|então|entao|aí|daí|em seguida|por fim)\b|,/
+
+export type Composta =
+  | { tipo: "encadeada"; intencoes: Modo[] } // diagnóstico -> execução (M3 -> M5)
+  | { tipo: "demais" } // 3+ intenções numa frase só: pedir pro usuário quebrar
+
+/**
+ * 3.6 — Tarefa composta: DUAS intenções de naturezas diferentes (diagnóstico + execução) ligadas por
+ * um conector. Diferente do desempate de decidirModo (lá os sinais conflitam numa intenção só); aqui
+ * são duas intenções sequenciais legítimas. NÃO escolhe uma marcha — manda encadear M3 -> M5 (a
+ * correção aplica o que o diagnóstico cravou). Ordem fixa: diagnóstico SEMPRE antes da execução.
+ * 3+ intenções com verbo => `demais` (ambíguo demais pra rotear seguro; o agent pede pra quebrar).
+ * Intenção única (só diag, só exec, ou sem conector) => null: segue o roteamento normal.
+ */
+export function detectarComposta(input: string, indice?: IndiceParaRef): Composta | null {
+  if (ehConversa(input, indice)) return null
+  const i = input.toLowerCase()
+  const temDiag = SINAIS_DIAGNOSTICO.some((s) => i.includes(s))
+  const temCorrecao = VERBOS_CORRECAO.some((v) => i.includes(v))
+  if (!temDiag || !temCorrecao) return null
+  if (!RE_CONECTOR_COMPOSTA.test(input)) return null
+
+  const clausulasComVerbo = input
+    .split(RE_CONECTOR_COMPOSTA)
+    .map((p) => p.trim().toLowerCase())
+    .filter((p) => SINAIS_DIAGNOSTICO.some((s) => p.includes(s)) || VERBOS_CORRECAO.some((v) => p.includes(v)))
+    .length
+  if (clausulasComVerbo >= 3) return { tipo: "demais" }
+  return { tipo: "encadeada", intencoes: ["diagnostico", "execucao"] }
 }
 
 const TERMOS_DOMINIO = new Set([
@@ -186,6 +241,83 @@ export function extrairEntidades(input: string): string[] {
   return ordenados.slice(0, 10)
 }
 
+/**
+ * Marques (TCC) — perfil de frequência de termos de um texto. Tokeniza, quebra camelCase/snake, tira
+ * stopword, conta frequência. É o núcleo extrativo: base do resumo de 1 linha (zero token) e do
+ * ranking de relevância arquivo↔sintoma. Determinístico, sem modelo.
+ */
+export function perfilTermos(texto: string): Map<string, number> {
+  const freq = new Map<string, number>()
+  const add = (t: string) => {
+    const p = t.toLowerCase()
+    if (p.length >= 3 && !STOPWORDS.has(p)) freq.set(p, (freq.get(p) ?? 0) + 1)
+  }
+  for (const bruto of texto.split(/[^\p{L}\p{Nd}]+/u)) {
+    if (!bruto) continue
+    for (const camel of quebrarCamel(bruto)) {
+      for (const parte of camel.split("_")) if (parte) add(parte)
+    }
+    if (bruto.includes("_")) for (const parte of bruto.split("_")) if (parte) add(parte)
+    else add(bruto)
+  }
+  return freq
+}
+
+/**
+ * Resumo extrativo de 1 linha (Marques, zero token): os N termos mais salientes do arquivo. Não é
+ * prosa — é a "assinatura semântica" do arquivo, pra o mapa do projeto e pra o índice de retrieval.
+ */
+export function resumoExtrativo(texto: string, n = 12): string[] {
+  return [...perfilTermos(texto).entries()]
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .slice(0, n)
+    .map(([t]) => t)
+}
+
+// Ponte de domínio PT→EN por PREFIXO (pega conjugações: "recarr*" -> recharge/credit, "dobr*" ->
+// double). O código é em inglês; o sintoma vem em PT. NÃO é lista de linguagens chumbada — é
+// vocabulário de domínio, e os alvos são VALIDADOS contra os identificadores reais do índice
+// (expandirDominio recebe `vocab`), então só entra o que o projeto de fato usa. Cresce com o produto.
+const PONTE_DOMINIO: { pre: string; alvos: string[] }[] = [
+  { pre: "recarr", alvos: ["recharge", "credit", "topup", "balance"] },
+  { pre: "saldo", alvos: ["balance", "credit", "wallet"] },
+  { pre: "cred", alvos: ["credit"] },
+  { pre: "pag", alvos: ["payment", "pay", "checkout"] },
+  { pre: "cobr", alvos: ["charge", "billing"] },
+  { pre: "estorn", alvos: ["refund"] },
+  { pre: "reembol", alvos: ["refund"] },
+  { pre: "fatur", alvos: ["invoice", "billing"] },
+  { pre: "dobr", alvos: ["double", "duplicate"] },
+  { pre: "duplic", alvos: ["duplicate"] },
+  { pre: "carteira", alvos: ["wallet", "balance"] },
+  { pre: "import", alvos: ["import"] },
+  { pre: "conex", alvos: ["connection", "connect", "client", "url"] },
+  { pre: "conect", alvos: ["connection", "connect", "client"] },
+  { pre: "perfil", alvos: ["profile", "user"] },
+  { pre: "mensag", alvos: ["message", "send"] },
+  { pre: "template", alvos: ["template"] },
+  { pre: "webhook", alvos: ["webhook", "callback"] },
+  { pre: "segred", alvos: ["secret", "signature", "hmac"] },
+  { pre: "secret", alvos: ["secret", "signature", "hmac"] },
+  { pre: "assinatura", alvos: ["signature", "sign"] },
+  { pre: "ativa", alvos: ["activate", "active", "enable"] },
+]
+
+/**
+ * Expande os termos do sintoma com vocabulário de domínio em inglês (casado por prefixo). Se `vocab`
+ * (identificadores reais do índice) for dado, só mantém alvos que existem no projeto — aterra a ponte
+ * no código de verdade, sem chumbar. Devolve os tokens originais + os alvos válidos.
+ */
+export function expandirDominio(tokens: string[], vocab?: Set<string>): string[] {
+  const out = new Set(tokens.map((t) => t.toLowerCase()))
+  for (const t of out) {
+    for (const { pre, alvos } of PONTE_DOMINIO) {
+      if (t.startsWith(pre)) for (const a of alvos) if (!vocab || vocab.has(a)) out.add(a)
+    }
+  }
+  return [...out]
+}
+
 // 3.0 — STACK_TRACE colado: frame com arquivo:linha (Java/Kotlin/JS), Traceback (Python), panic (Go).
 // É bug real pra diagnosticar, não pergunta — sobrepõe o classificador de palavra-chave no roteamento.
 const RE_STACK_TRACE =
@@ -197,15 +329,13 @@ export function temStackTrace(input: string): boolean {
 
 export type Tamanho = "pequeno" | "medio" | "grande"
 
-const RE_ARQUIVO_CITADO =
-  /\b[\w./-]+\.(?:kt|kts|java|ts|tsx|js|jsx|py|go|rs|php|rb|sql|json|ya?ml)\b/gi
-
 // 3.0 — Tamanho previsto da tarefa por linhas, caracteres e quantos arquivos o input cita. Vira
-// escolha de marcha (grande -> loop longo). Heurística barata, sem chamar modelo.
+// escolha de marcha (grande -> loop longo). Heurística barata, sem chamar modelo. A contagem de
+// arquivos é agnóstica de extensão (extrairArquivosCitados), não lista chumbada.
 export function tamanhoPrevisto(input: string): Tamanho {
   const linhas = input.split("\n").length
   const chars = input.length
-  const arquivos = (input.match(RE_ARQUIVO_CITADO) ?? []).length
+  const arquivos = extrairArquivosCitados(input).length
   if (linhas > 40 || chars > 2500 || arquivos >= 4) return "grande"
   if (linhas > 12 || chars > 700 || arquivos >= 2) return "medio"
   return "pequeno"
@@ -233,33 +363,23 @@ export function respostaHedge(resposta: string): boolean {
   return RE_DUVIDA.test(resposta)
 }
 
-// Linguagem/ecossistema citado no sintoma ("a lib de python", "no php", "cliente node"). É um
-// LOCALIZADOR forte num monorepo poliglota: escopa a busca pros arquivos daquele ecossistema, em vez
-// de casar prosa espalhada por todos os repos. Cada entrada: termos que disparam + extensões do escopo.
-const LINGUAGENS: { lang: string; termos: string[]; exts: string[] }[] = [
-  { lang: "python", termos: ["python", "pydantic", "pip", "django", "flask"], exts: [".py"] },
-  { lang: "php", termos: ["php", "composer", "laravel"], exts: [".php"] },
-  { lang: "node", termos: ["node", "nodejs", "npm", "javascript", "typescript"], exts: [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"] },
-  { lang: "java", termos: ["java", "kotlin", "gradle", "maven", "spring"], exts: [".java", ".kt", ".kts"] },
-  { lang: "ruby", termos: ["ruby", "rails", "bundler"], exts: [".rb"] },
-  { lang: "go", termos: ["golang"], exts: [".go"] },
-]
+// 4.3 — coerência de loop longo: contradição com decisão anterior.
+
+export type Edicao = { arquivo: string; ancora: string; novo: string }
 
 /**
- * Linguagens citadas, ORDENADAS pela primeira aparição no texto. A primeira costuma ser o SUJEITO da
- * reclamação ("a lib de PYTHON não funciona, no node funciona") — quem escopa usa a primeira, não
- * todas, senão num contraste ("X quebra, Y funciona") puxa o escopo do Y (o que funciona) junto. Pura.
+ * 4.3 — Uma nova edição CONTRADIZ uma anterior (flip-flop)? É o caso de desfazer o que acabou de
+ * fazer: a edição anterior foi X->Y e a nova é Y->X no MESMO arquivo. Salvaguarda de escopo: edições
+ * em arquivos DIFERENTES nunca conflitam (um outro arquivo com padrão parecido pode ser intencional).
+ * Função pura. Repetição idêntica (X->Y de novo) NÃO é contradição — é trabalho do dedup (edicaoRepetida).
  */
-export function linguagensCitadas(input: string): { lang: string; exts: string[] }[] {
-  const low = input.toLowerCase()
-  const achados: { lang: string; exts: string[]; pos: number }[] = []
-  for (const l of LINGUAGENS) {
-    let min = Infinity
-    for (const t of l.termos) {
-      const m = low.search(new RegExp(`\\b${t}\\b`))
-      if (m >= 0 && m < min) min = m
-    }
-    if (min < Infinity) achados.push({ lang: l.lang, exts: l.exts, pos: min })
+export function detectarContradicao(anteriores: Edicao[], nova: Edicao): boolean {
+  for (const a of anteriores) {
+    if (a.arquivo !== nova.arquivo) continue
+    if (a.ancora === nova.novo && a.novo === nova.ancora) return true
   }
-  return achados.sort((a, b) => a.pos - b.pos).map(({ lang, exts }) => ({ lang, exts }))
+  return false
 }
+
+// Escopo por linguagem foi REMOVIDO: virou casamento do sintoma contra a árvore real do projeto
+// (escoposCitados, em contexto.ts) — agnóstico, sem lista de linguagens chumbada.

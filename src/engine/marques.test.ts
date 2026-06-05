@@ -8,7 +8,49 @@ import {
   perfilTermos,
   resumoExtrativo,
   expandirDominio,
+  pontuarDiff,
 } from "./marques"
+
+describe("copiloto — decidirModo planejar / comunicar", () => {
+  test("pedido de plano vira planejar", () => {
+    expect(decidirModo("monta um plano pra migrar o billing pro novo provider")).toBe("planejar")
+    expect(decidirModo("como eu faria a refatoração do módulo de auth")).toBe("planejar")
+  })
+  test("pedido de commit/PR/changelog vira comunicar", () => {
+    expect(decidirModo("escreve o commit dessa mudança")).toBe("comunicar")
+    expect(decidirModo("faz o PR com a descrição do que mudou")).toBe("comunicar")
+    expect(decidirModo("gera o changelog da release")).toBe("comunicar")
+  })
+  test("comunicar/planejar ganham do verbo de ação", () => {
+    // "cria" é execução, mas "escreve o commit" é comunicar
+    expect(decidirModo("escreve o commit e cria a tag")).toBe("comunicar")
+  })
+})
+
+describe("COMUNICAR — pontuarDiff", () => {
+  const diff = [
+    "diff --git a/wallet.kt b/wallet.kt",
+    "--- a/wallet.kt",
+    "+++ b/wallet.kt",
+    "+fun addCredit(amount: BigDecimal) { balance += amount; ledger.record(amount) }",
+    "+fun refund(tx: Transaction) { balance += tx.cost }",
+    "diff --git a/style.css b/style.css",
+    "--- a/style.css",
+    "+++ b/style.css",
+    "+  margin: 0;",
+  ].join("\n")
+
+  test("ranqueia a mudança central acima da cosmética", () => {
+    const r = pontuarDiff(diff)
+    expect(r[0].arquivo).toBe("wallet.kt")
+    expect(r[0].score).toBeGreaterThan(r[1].score)
+  })
+  test("conta adições por arquivo", () => {
+    const r = pontuarDiff(diff)
+    const wallet = r.find((m) => m.arquivo === "wallet.kt")
+    expect(wallet?.adicoes).toBe(2)
+  })
+})
 
 describe("Marques extrativo — perfilTermos / resumoExtrativo", () => {
   test("conta frequência e quebra camelCase + snake_case", () => {

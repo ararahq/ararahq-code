@@ -9,7 +9,7 @@
 // O bloco do fim marca onde adicionar os seus. Quanto mais casos de diagnóstico com `cravouSe` e
 // `arquivosEsperados`, mais o placar separa "errou o contexto" de "errou o raciocínio".
 
-export type Marcha = "execucao" | "diagnostico" | "conversa" | "loop-longo"
+export type Marcha = "execucao" | "diagnostico" | "conversa" | "loop-longo" | "compreender" | "planejar" | "comunicar"
 
 export type Caso = {
   id: string
@@ -42,6 +42,11 @@ export const CASOS: Caso[] = [
   },
   { id: "rota-conversa", prompt: "oi, tudo bem?", marchaEsperada: "conversa" },
   { id: "rota-loop-longo", prompt: "refatora os arquivos App.tsx, api.ts, db.ts e auth.ts pra usar o novo cliente http", marchaEsperada: "loop-longo" },
+
+  // ---- Copiloto: roteamento das capacidades de leitura (grátis) -------------
+  { id: "rota-compreender", prompt: "me explica como funciona o fluxo de autenticação desse projeto", marchaEsperada: "compreender" },
+  { id: "rota-planejar", prompt: "como eu faria pra migrar o billing pro novo provider? monta um plano", marchaEsperada: "planejar" },
+  { id: "rota-comunicar", prompt: "escreve o commit e a descrição do PR dessa mudança", marchaEsperada: "comunicar" },
 
   // ---- Flagship: o bug dos números (roteamento + contexto + diagnóstico) -----
   {

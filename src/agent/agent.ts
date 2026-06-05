@@ -13,18 +13,18 @@ import {
   CADEIA_DIAGNOSTICO,
   type Esforco,
 } from "./router"
-import { pareceSeguimento, type Modo } from "../engine/marques"
+import { pareceSeguimento, pontuarDiff, type Modo } from "../engine/marques"
 import { pareceMultiPasso, planejar, ferramentasDaFase, type Passo } from "./planner"
 import { diagnosticarComFallback, reunirMaterial, gerarCandidatosDiagnostico } from "./diagnostico"
 import { selecionarPorVerificacao } from "./testtime"
-import { montarMapaAmplo } from "./contexto"
+import { montarMapaAmplo, superficieDeArquivos } from "./contexto"
 import { criarResumirFn } from "../context/resumir"
 import { Backup } from "../tools/backup"
 import { escaladaPendente, estourouTeto, consumirEscalada, podeTrocarMarcha, registrarTrocaMarcha } from "./recovery"
 import { registrarTarefa } from "./custo"
 import { ferramentas, novaRodada, rodar } from "../tools"
 import { carregarContexto } from "../context/projeto"
-import { carregarIndice, registrarBug, montarRegistroBug } from "../conhecimento"
+import { carregarIndice, registrarBug, montarRegistroBug, buscarPrecedente } from "../conhecimento"
 import {
   escopoDoDiagnostico,
   escopoDeArquivos,
@@ -108,6 +108,29 @@ CONTEXTO DO PROJETO:
 
 MAPA DO PROJETO (assinaturas + resumo de 1 linha por arquivo relevante):
 {mapa}`
+
+// Copiloto — PLANEJAR: produz um PLANO pro humano aprovar (não executa). Raciocínio alto (M3).
+const SYSTEM_PLANEJAR = `Você é o Arara Code em modo PLANEJAMENTO. O usuário quer um PLANO antes de fazer — você NÃO executa nada agora.
+Produza um plano ESTRUTURADO em português brasileiro: passos numerados na ordem de execução, dependências entre eles, riscos e pontos de decisão, e o que verificar ao final. Cite arquivo:linha quando ancorar num ponto do código. Seja concreto e enxuto — um plano que o dev aprova e segue. NÃO edite nem rode comandos. Não repita estas instruções.
+
+CONTEXTO DO PROJETO:
+{memoria_projeto}
+
+PRECEDENTES (decisões/bugs já registrados no projeto):
+{precedentes}
+
+MAPA DO PROJETO (assinaturas + resumo por arquivo relevante):
+{mapa}`
+
+// Copiloto — COMUNICAR: escreve commit/PR/changelog em PT-BR a partir do diff. Escrita barata (M2).
+const SYSTEM_COMUNICAR = `Você é o Arara Code em modo COMUNICAÇÃO. Escreva a comunicação da mudança (commit, PR, changelog ou nota pro time — siga o que o usuário pediu) em português brasileiro, claro e técnico, sem emojis.
+Destaque o que IMPORTA (a mudança central) e omita ruído (cosmético, formatação). Baseie-se SÓ no diff abaixo — não invente o que não está nele. Se for mensagem de commit, uma linha de assunto curta + corpo só se necessário. Não repita estas instruções.
+
+MUDANÇAS RANQUEADAS POR IMPORTÂNCIA (Marques):
+{ranking}
+
+DIFF:
+{diff}`
 
 function montarSistema(memoria: string, plano: string, contexto: string): string {
   return SYSTEM_BASE.replace("{memoria_projeto}", memoria || "(sem memória registrada)")
@@ -636,9 +659,17 @@ export async function processar(input: string) {
     return
   }
 
-  // Copiloto — COMPREENDER: explica/panorama. Modelo barato de contexto longo, read-only, não edita.
+  // Copiloto — capacidades de LEITURA (não mexem no código): explicar, planejar, comunicar.
   if (modo === "compreender") {
     await processarCompreender(input, ctx, decisao.modelo)
+    return
+  }
+  if (modo === "planejar") {
+    await processarPlanejar(input, ctx, decisao.modelo)
+    return
+  }
+  if (modo === "comunicar") {
+    await processarComunicar(input, decisao.modelo)
     return
   }
 
@@ -1065,39 +1096,30 @@ async function processarConversa(input: string, ctx: { resumo: string }, modeloC
 }
 
 /**
- * Copiloto — COMPREENDER. Monta o MAPA AMPLO do projeto (Camada 2 modo amplo: assinaturas + resumos
- * 1.4), dá ao modelo barato de contexto longo (thinking OFF) com ferramentas SÓ de leitura e pede uma
- * explicação em PT-BR com arquivo:linha. Não edita, não roda comando. Fachada: "Jade · entendendo".
+ * Streamer compartilhado das capacidades de LEITURA do copiloto (compreender/planejar/comunicar): o
+ * `sistema` já vem com o contexto reunido (mapa + corpos / diff). UMA passada, SEM ferramentas — nunca
+ * edita nem executa, e não entra em loop de exploração (que fazia o modelo gastar o orçamento lendo e
+ * terminar sem responder). Honra abort, stream, custo e fachada Jade. O chamador já mostrou ui.jade.
  */
-async function processarCompreender(
+async function streamLeitura(
   input: string,
-  ctx: { completo: string },
+  modo: Modo,
+  rotulo: string,
   modeloCloud: string,
+  sistema: string,
+  thinking: boolean,
 ): Promise<void> {
   let openrouter: ReturnType<typeof provedor>
   try {
     openrouter = provedor()
   } catch (e) {
-    ui.jade("entendendo")
+    ui.spinnerStop()
     ui.erro((e as Error).message)
     return
   }
-  ui.jade("entendendo")
-  ui.spinnerStart("Jade entendendo")
-  const mapa = await montarMapaAmplo(process.cwd(), input, criarResumirFn())
-  const sistema = SYSTEM_COMPREENDER.replace("{memoria_projeto}", ctx.completo || "(sem memória registrada)").replace(
-    "{mapa}",
-    mapa.texto || "(índice vazio — leia os arquivos sob demanda)",
-  )
-  const toolsLeitura = {
-    ler_arquivo: ferramentas.ler_arquivo,
-    listar_arquivos: ferramentas.listar_arquivos,
-    buscar_no_projeto: ferramentas.buscar_no_projeto,
-  }
-  logInterno(`compreender modelo=${modeloCloud} arquivos=${mapa.arquivos.length}`)
+  logInterno(`${modo} modelo=${modeloCloud} thinking=${thinking}`)
   historico.push({ role: "user", content: input })
   const inicio = Date.now()
-
   const ac = new AbortController()
   _abort = ac
   let erroCapturado: unknown = null
@@ -1105,11 +1127,11 @@ async function processarCompreender(
     model: openrouter(modeloCloud) as Modelo,
     system: sistema,
     messages: historico.slice(-LIMITE_HISTORICO),
-    tools: toolsLeitura,
-    stopWhen: stepCountIs(LIMITE_INVESTIGACAO),
+    stopWhen: stepCountIs(1),
     temperature: 0.3,
     abortSignal: ac.signal,
-    onStepFinish: () => ui.spinnerStart("Jade entendendo"),
+    providerOptions: thinking ? { openrouter: { reasoning: { effort: "medium" } } } : undefined,
+    onStepFinish: () => ui.spinnerStart(`Jade ${rotulo}`),
     onError: ({ error }) => {
       erroCapturado = error
     },
@@ -1163,8 +1185,64 @@ async function processarCompreender(
   } catch {}
   const custo = custoUSD(modeloCloud, inTok, outTok)
   ui.metricas(inTok + outTok, custo, Date.now() - inicio)
-  await registrarTarefa({ modo: "compreender", modelo: modeloCloud, thinking: false, tokens: inTok + outTok, custoUSD: custo, ms: Date.now() - inicio })
+  await registrarTarefa({ modo, modelo: modeloCloud, thinking, tokens: inTok + outTok, custoUSD: custo, ms: Date.now() - inicio })
   historico.push({ role: "assistant", content: resposta })
+}
+
+const MAX_CORPOS_COMPREENDER = 5
+
+/** Copiloto — COMPREENDER: mapa amplo + CORPOS dos arquivos mais relevantes, explica em PT-BR. UMA
+ * passada (contexto pré-reunido, sem loop de ferramentas — senão o modelo explora e some sem responder). */
+async function processarCompreender(input: string, ctx: { completo: string }, modeloCloud: string): Promise<void> {
+  ui.jade("entendendo")
+  ui.spinnerStart("Jade entendendo")
+  const mapa = await montarMapaAmplo(process.cwd(), input, criarResumirFn())
+  const corpos = await superficieDeArquivos(process.cwd(), mapa.arquivos.slice(0, MAX_CORPOS_COMPREENDER))
+  const contexto = [mapa.texto, corpos?.texto].filter(Boolean).join("\n\n") || "(índice vazio — sem contexto disponível)"
+  const sistema = SYSTEM_COMPREENDER.replace("{memoria_projeto}", ctx.completo || "(sem memória registrada)").replace("{mapa}", contexto)
+  await streamLeitura(input, "compreender", "entendendo", modeloCloud, sistema, false)
+}
+
+/** Copiloto — PLANEJAR: mapa amplo + precedentes (1.5), raciocínio (M3), produz o plano. "Jade · planejando". */
+async function processarPlanejar(input: string, ctx: { completo: string }, modeloCloud: string): Promise<void> {
+  ui.jade("planejando")
+  ui.spinnerStart("Jade planejando")
+  const [mapa, precedentes] = await Promise.all([
+    montarMapaAmplo(process.cwd(), input, criarResumirFn()),
+    buscarPrecedente(process.cwd(), input),
+  ])
+  const precTexto = precedentes.length
+    ? precedentes
+        .map((p) => (p.tipo === "bug" ? `- bug: ${p.item.sintoma} -> ${p.item.causaRaiz}` : `- decisão: ${p.item.titulo}: ${p.item.decisao}`))
+        .join("\n")
+    : "(nenhum precedente registrado)"
+  const sistema = SYSTEM_PLANEJAR.replace("{memoria_projeto}", ctx.completo || "(sem memória registrada)")
+    .replace("{precedentes}", precTexto)
+    .replace("{mapa}", mapa.texto || "(índice vazio)")
+  // UMA passada (doc): o contexto já veio reunido (mapa amplo + precedentes). SEM loop de ferramentas —
+  // senão o modelo gasta o orçamento explorando e termina no preâmbulo, sem entregar o plano.
+  await streamLeitura(input, "planejar", "planejando", modeloCloud, sistema, true)
+}
+
+const MAX_CHARS_DIFF = 14_000
+
+/** Copiloto — COMUNICAR: pega o diff, ranqueia por Marques, escreve commit/PR/changelog PT-BR (M2). "Jade · escrevendo". */
+async function processarComunicar(input: string, modeloCloud: string): Promise<void> {
+  ui.jade("escrevendo")
+  ui.spinnerStart("Jade escrevendo")
+  let diff = (await rodar("git diff HEAD", undefined, 15_000)).saida.trim()
+  if (!diff) diff = (await rodar("git show --stat --patch --no-color HEAD", undefined, 15_000)).saida.trim()
+  if (!diff) {
+    ui.spinnerStop()
+    ui.aviso("não há mudança pra descrever — working tree limpo e sem commits.")
+    return
+  }
+  const ranking = pontuarDiff(diff)
+  const rankTexto = ranking.length
+    ? ranking.slice(0, 12).map((m) => `- ${m.arquivo} (+${m.adicoes}/-${m.remocoes})`).join("\n")
+    : "(diff sem arquivos detectáveis)"
+  const sistema = SYSTEM_COMUNICAR.replace("{ranking}", rankTexto).replace("{diff}", diff.slice(0, MAX_CHARS_DIFF))
+  await streamLeitura(input, "comunicar", "escrevendo", modeloCloud, sistema, false)
 }
 
 function finalizarAbort() {
@@ -1179,6 +1257,8 @@ function rotuloModo(modo: string): string {
   if (modo === "diagnostico") return "diagnóstico"
   if (modo === "conversa") return "conversa"
   if (modo === "compreender") return "entendendo"
+  if (modo === "planejar") return "planejando"
+  if (modo === "comunicar") return "escrevendo"
   return "execução"
 }
 

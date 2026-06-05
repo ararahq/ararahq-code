@@ -73,6 +73,10 @@ export function rotear(input: string, indice?: IndiceParaRef): Decisao {
   if (modo === "conversa") return { modo, thinking: false, modelo: MODELOS.execucao, motivo: "conversa" }
   // Copiloto — compreender: explicação/panorama, contexto longo barato, thinking OFF, não edita.
   if (modo === "compreender") return { modo, thinking: false, modelo: MODELOS.compreender, motivo: "compreender" }
+  // Copiloto — planejar: plano pro humano aprovar. Reusa M3 (raciocínio) numa passada, NÃO executa.
+  if (modo === "planejar") return { modo, thinking: true, modelo: MODELOS.diagnostico, motivo: "planejar" }
+  // Copiloto — comunicar: commit/PR/changelog em PT-BR. Reusa M2 (barato) — é escrita, não raciocínio.
+  if (modo === "comunicar") return { modo, thinking: false, modelo: MODELOS.execucao, motivo: "comunicar" }
   if (temStackTrace(input)) {
     return { modo: "diagnostico", thinking: true, modelo: MODELOS.diagnostico, motivo: "stack-trace" }
   }

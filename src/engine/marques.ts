@@ -1,7 +1,7 @@
 import { pareceReferenciaCodigo, extrairArquivosCitados, type IndiceParaRef } from "./refcodigo"
 
 export type Complexidade = "simples" | "media" | "alta"
-export type Modo = "conversa" | "execucao" | "diagnostico" | "compreender"
+export type Modo = "conversa" | "execucao" | "diagnostico" | "compreender" | "planejar" | "comunicar"
 
 const STOPWORDS = new Set([
   "a", "o", "e", "de", "do", "da", "que", "se", "por", "para", "com", "como",
@@ -65,6 +65,23 @@ export function ehConversa(input: string, indice?: IndiceParaRef): boolean {
   return palavras <= 6 && SAUDACOES.some((s) => low.includes(s))
 }
 
+// Copiloto — PLANEJAR: o usuário quer um PLANO antes de fazer (abordagem, passos, ordem). Raciocínio
+// alto, mas o produto é um plano pro humano aprovar — não uma mudança aplicada.
+const SINAIS_PLANEJAR = [
+  "como eu faria", "qual a melhor forma", "qual a melhor maneira", "planeja", "planejar", "qual abordagem",
+  "como migrar", "como estruturar", "monta um plano", "monta o plano", "faz um plano", "passo a passo pra",
+  "passo a passo para", "qual estratégia", "qual estrategia", "como organizar", "antes de fazer", "como abordar",
+]
+
+// Copiloto — COMUNICAR: escrever sobre uma mudança (commit, PR, changelog, nota pro time). O PT-BR de
+// qualidade é o diferencial. O agent valida se há diff de verdade antes de seguir.
+const SINAIS_COMUNICAR = [
+  "escreve o commit", "escreva o commit", "mensagem de commit", "msg de commit", "faz o pr", "faça o pr",
+  "faz a pr", "descrição do pr", "descricao do pr", "changelog", "release notes", "nota de release",
+  "documenta isso pro time", "documenta pro time", "explica essa mudança pro", "escreve o comentário",
+  "resume o que mudou", "resumo do que mudou", "descreve a mudança", "descreve essa mudança",
+]
+
 // Copiloto — COMPREENDER: pedido de explicação/panorama do código. Volume de leitura, não insight.
 // Distinto de diagnóstico (sintoma/causa) e execução (mudança): aqui o usuário quer ENTENDER.
 const SINAIS_COMPREENDER = [
@@ -109,9 +126,14 @@ export function decidirModo(input: string, indice?: IndiceParaRef): Modo {
   if (ehConversa(input, indice)) return "conversa"
   const i = input.toLowerCase()
 
+  // Copiloto (ordem do doc: comunicar > planejar > compreender > diagnosticar > executar). Comunicar e
+  // planejar não pedem mudança no código — o verbo deles ganha do de ação.
+  if (SINAIS_COMUNICAR.some((s) => i.includes(s))) return "comunicar"
+  if (SINAIS_PLANEJAR.some((s) => i.includes(s))) return "planejar"
+
   const temExecucao = SINAIS_EXECUCAO.some((s) => i.includes(s))
-  // Copiloto — COMPREENDER vem antes de diagnosticar/executar: "me explica como funciona X" é entender,
-  // não mexer. O verbo de explicação ganha do de ação só quando NÃO há instrução de mudança no código.
+  // COMPREENDER: "me explica como funciona X" é entender, não mexer. O verbo de explicação ganha do de
+  // ação só quando NÃO há instrução de mudança no código.
   if (SINAIS_COMPREENDER.some((s) => i.includes(s)) && !temExecucao) return "compreender"
 
   const temDiagnostico = SINAIS_DIAGNOSTICO.some((s) => i.includes(s))
@@ -272,6 +294,39 @@ export function resumoExtrativo(texto: string, n = 12): string[] {
     .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
     .slice(0, n)
     .map(([t]) => t)
+}
+
+export type MudancaDiff = { arquivo: string; adicoes: number; remocoes: number; score: number }
+
+/**
+ * 3.6/COMUNICAR — Pontua cada arquivo de um diff unified por IMPORTÂNCIA, via Marques: mudança com
+ * mais termos de domínio distintos + mais linhas = central; whitespace/import = cosmética. Ranqueia
+ * pra a comunicação destacar o que importa e omitir ruído. Determinístico, zero token.
+ */
+export function pontuarDiff(diff: string): MudancaDiff[] {
+  const out: MudancaDiff[] = []
+  let atual: { arquivo: string; add: number; rem: number; texto: string } | null = null
+  const fechar = () => {
+    if (atual) out.push({ arquivo: atual.arquivo, adicoes: atual.add, remocoes: atual.rem, score: perfilTermos(atual.texto).size + Math.min(atual.add + atual.rem, 40) })
+  }
+  for (const linha of diff.split("\n")) {
+    const m = linha.match(/^\+\+\+ b\/(.+)$/)
+    if (m) {
+      fechar()
+      atual = { arquivo: m[1], add: 0, rem: 0, texto: "" }
+      continue
+    }
+    if (!atual) continue
+    if (linha.startsWith("+") && !linha.startsWith("+++")) {
+      atual.add++
+      atual.texto += `${linha.slice(1)}\n`
+    } else if (linha.startsWith("-") && !linha.startsWith("---")) {
+      atual.rem++
+      atual.texto += `${linha.slice(1)}\n`
+    }
+  }
+  fechar()
+  return out.sort((a, b) => b.score - a.score)
 }
 
 // Ponte de domínio PT→EN por PREFIXO (pega conjugações: "recarr*" -> recharge/credit, "dobr*" ->

@@ -651,7 +651,7 @@ function rankearPorTermos(indice: Indice, queryTokens: string[]): { arquivo: str
 
 /** Despeja o conteúdo dos arquivos escolhidos pelo retrieval (cap de linhas/chars). O modelo lê e
  * aponta arquivo:linha. Usado quando o índice não montou par nem subtree, mas os termos acharam alvo. */
-async function superficieDeArquivos(
+export async function superficieDeArquivos(
   raiz: string,
   arquivos: string[],
 ): Promise<{ texto: string; arquivos: string[] } | null> {

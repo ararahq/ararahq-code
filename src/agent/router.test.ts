@@ -37,6 +37,20 @@ describe("3.6 — rotear com tarefa composta", () => {
     expect(d.thinking).toBe(false)
   })
 
+  test("planejar reusa M3 (raciocínio) com thinking on, sem executar", () => {
+    const d = rotear("monta um plano pra migrar o billing pro novo provider")
+    expect(d.modo).toBe("planejar")
+    expect(d.modelo).toBe(MODELOS.diagnostico)
+    expect(d.thinking).toBe(true)
+  })
+
+  test("comunicar reusa M2 (barato), thinking off", () => {
+    const d = rotear("escreve o commit dessa mudança")
+    expect(d.modo).toBe("comunicar")
+    expect(d.modelo).toBe(MODELOS.execucao)
+    expect(d.thinking).toBe(false)
+  })
+
   test("stack trace -> diagnóstico forte", () => {
     const d = rotear('Exception at com.foo.Bar(Bar.kt:42)')
     expect(d.modo).toBe("diagnostico")

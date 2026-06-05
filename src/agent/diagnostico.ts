@@ -1,7 +1,9 @@
 import { generateText } from "ai"
 import { extrairEntidades, ehGenerico } from "../engine/marques"
 import { comandoBusca, comandoContagem, rodar } from "../tools"
-import { montarPacote, escoposCitados } from "./contexto"
+import { montarPacote, escoposCitados, superficieDeArquivos } from "./contexto"
+import { localizarArquivo } from "./navegacao"
+import { carregarIndice } from "../conhecimento"
 import { criarResumirFn } from "../context/resumir"
 import { listarFontes } from "../conhecimento/walk"
 
@@ -496,6 +498,66 @@ export async function diagnosticar(
   return { texto, inTok, outTok, rodadas, resolvido: !RE_FALTA.test(texto) }
 }
 
+// Locator (Tier 1 do gate de custo): tradução do sintoma leigo → raízes de código + tamanhos da seleção.
+const TOP_CONFIANTE = 1
+const TOP_SHORTLIST = 3
+const SISTEMA_TERMOS = `Você é um localizador de código. Dado um relato LEIGO de bug, liste de 6 a 10 termos de busca que aparecem LITERALMENTE no código-fonte.
+REGRAS:
+- Termos CURTOS: uma palavra só, minúsculas. Raízes reais (auth, password, login, token, session, retry, timeout, lock, mutex, dedup, refund, credit, webhook, ssrf, proxy, sanitize, xss, escape).
+- NÃO invente nomes compostos tipo "UserAuthenticationEntry". Código usa raízes curtas.
+- Inclua o jargão técnico da CLASSE do problema (segurança→ssrf/xss/sanitize; concorrência→lock/mutex/race; retry→retry/backoff).
+- Um por linha. Sem prosa, sem numeração.`
+
+/** Micro-chamada barata: traduz o sintoma leigo em raízes de código pesquisáveis (a única parte que pede modelo). */
+async function traduzirParaTermos(
+  input: string,
+  model: Parameters<typeof generateText>[0]["model"],
+  signal?: AbortSignal,
+): Promise<{ termos: string[]; inTok: number; outTok: number }> {
+  const r = await generateText({ model, system: SISTEMA_TERMOS, prompt: input, temperature: 0, abortSignal: signal })
+  const termos = r.text
+    .split("\n")
+    .map((l) => l.replace(/^[-*\d.\s]+/, "").trim().toLowerCase())
+    .filter((l) => /^[a-z][a-z0-9_]{2,}$/.test(l))
+    .slice(0, 10)
+  return { termos, inTok: r.usage?.inputTokens ?? 0, outTok: r.usage?.outputTokens ?? 0 }
+}
+
+/**
+ * Enriquece material FRACO (sem par preciso) via locator: traduz o sintoma → localiza o arquivo barato →
+ * dá a superfície do top-1 (se confiante) ou da shortlist top-5 (senão, o modelo escolhe). É o gate de
+ * custo: gasta uma micro-chamada e localiza ANTES de raciocinar, em vez de raciocinar no escuro.
+ * Gateado em `pares.length===0` — NÃO toca os casos precisos (par forte) que já cravam (protege o 8/8).
+ * Best-effort: qualquer falha degrada pro material original. Retorna o custo da micro-chamada.
+ */
+async function enriquecerComLocator(
+  input: string,
+  material: Material,
+  model: Parameters<typeof generateText>[0]["model"],
+  custoDe: (inTok: number, outTok: number) => number,
+  signal?: AbortSignal,
+): Promise<{ inTok: number; outTok: number; custo: number }> {
+  try {
+    const t = await traduzirParaTermos(input, model, signal)
+    const base = { inTok: t.inTok, outTok: t.outTok, custo: custoDe(t.inTok, t.outTok) }
+    if (!t.termos.length) return base
+    const indice = await carregarIndice(process.cwd())
+    if (!indice) return base
+    const loc = await localizarArquivo(process.cwd(), indice, t.termos)
+    const topo = (loc.confiante ? loc.candidatos.slice(0, TOP_CONFIANTE) : loc.candidatos.slice(0, TOP_SHORTLIST)).map((c) => c.arquivo)
+    const sup = topo.length ? await superficieDeArquivos(process.cwd(), topo) : null
+    if (sup) {
+      // SUBSTITUI o material fraco (grep ruidoso) pela superfície localizada — anexar inflava o prompt
+      // e estourava o tempo nos repos grandes. A superfície localizada é o sinal; o resto é ruído.
+      material.texto = sup.texto
+      material.escopado = true
+    }
+    return base
+  } catch {
+    return { inTok: 0, outTok: 0, custo: 0 }
+  }
+}
+
 /**
  * Diagnóstico com fallback INVISÍVEL (M3, D6): reúne o material UMA vez e percorre a cadeia
  * Gemini -> GPT-5.5 -> Opus. Se um modelo não crava (detectouHedge: sem arquivo:linha, hedge, ou
@@ -517,6 +579,16 @@ export async function diagnosticarComFallback(
   let outTok = 0
   let rodadas = 0
   let custo = 0
+  // Gate de custo: material fraco (sem par preciso) → localiza o arquivo barato antes de raciocinar.
+  // Não toca os casos de par forte (protege o 8/8 do Arara). Best-effort, micro-custo.
+  // NOTA: medido na Creditas, escalar a cadeia no localizado é NET-NEGATIVO (escala em localização
+  // confiante-mas-errada → confiante-errado caro + timeout). Mantém 1 passada barata no localizado.
+  if (material.pares.length === 0 && cadeia.length) {
+    const loc = await enriquecerComLocator(input, material, criarModel(cadeia[0]), (i, o) => custoDe(cadeia[0], i, o), signal)
+    inTok += loc.inTok
+    outTok += loc.outTok
+    custo += loc.custo
+  }
   const modelosUsados: string[] = []
   let ultimo: ResultadoDiagnostico = { texto: "", inTok: 0, outTok: 0, rodadas: 0, resolvido: false }
   let modelo = cadeia[0] ?? ""

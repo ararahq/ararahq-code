@@ -1,0 +1,111 @@
+import { test, expect, describe } from "bun:test"
+import { resolve } from "path"
+import { indexar } from "../conhecimento"
+import {
+  arquivoDoNo, entrypoints, dirs, listar, simbolosDe, vizinhosArquivo, grep, ler, termosDeBusca, explorar,
+  ranquearCandidatos,
+} from "./navegacao"
+
+const FIX = (nome: string) => resolve(import.meta.dir, "../../eval/fixtures", nome)
+
+describe("navegação — primitivas puras", () => {
+  test("arquivoDoNo extrai o caminho de nó de arquivo e de símbolo", () => {
+    expect(arquivoDoNo("f:src/a/b.kt")).toBe("src/a/b.kt")
+    expect(arquivoDoNo("s:src/a/b.kt#minhaFuncao")).toBe("src/a/b.kt")
+  })
+
+  test("termosDeBusca deriva tokens não-genéricos do ticket, sem genéricos nem curtos", () => {
+    const t = termosDeBusca("o número compartilhado está sendo salvo como dedicado")
+    expect(t.length).toBeGreaterThan(0)
+    expect(t).not.toContain("o")
+    expect(t.every((x) => x.length >= 3)).toBe(true)
+  })
+})
+
+describe("navegação — ações servidas do índice (fixture twilio-refund)", () => {
+  test("entrypoints rankeia por acoplamento entre arquivos (o service chamado é central)", async () => {
+    const indice = await indexar(FIX("twilio-refund"), { force: true })
+    const ep = entrypoints(indice, 12)
+    expect(ep.length).toBeGreaterThan(0)
+    // WalletService é chamado pelo webhook → tem grau de entrada, aparece no mapa.
+    expect(ep.some((e) => e.arquivo.includes("WalletService"))).toBe(true)
+  })
+
+  test("listar e dirs derivam a estrutura real", async () => {
+    const indice = await indexar(FIX("twilio-refund"), { force: true })
+    expect(listar(indice).some((a) => a.endsWith(".kt"))).toBe(true)
+    expect(dirs(indice).reduce((s, d) => s + d.arquivos, 0)).toBeGreaterThan(0)
+  })
+
+  test("simbolosDe e vizinhosArquivo expõem símbolos e ligam por nome único (sem import)", async () => {
+    const indice = await indexar(FIX("twilio-refund"), { force: true })
+    const arq = indice.simbolos.find((s) => s.arquivo.includes("TwilioWebhookService"))!.arquivo
+    expect(simbolosDe(indice, arq).length).toBeGreaterThan(0)
+    // o webhook injeta `WalletService` e chama `refund` — ambos def única → liga, mesmo same-package.
+    const viz = vizinhosArquivo(indice, arq)
+    expect(viz.some((v) => v.arquivo.includes("WalletService"))).toBe(true)
+  })
+
+  test("grep acha o termo no conteúdo e devolve linha/trecho com teto", async () => {
+    const indice = await indexar(FIX("twilio-refund"), { force: true })
+    const hits = await grep(FIX("twilio-refund"), indice, "class", 5)
+    expect(hits.length).toBeGreaterThan(0)
+    expect(hits.length).toBeLessThanOrEqual(5)
+    expect(hits[0]).toHaveProperty("linha")
+    expect(hits[0].linha).toBeGreaterThan(0)
+  })
+
+  test("ler devolve janela limitada, nunca passa do teto", async () => {
+    const indice = await indexar(FIX("twilio-refund"), { force: true })
+    const arq = indice.simbolos[0].arquivo
+    const j = await ler(FIX("twilio-refund"), arq, 1, 9999)
+    expect(j).not.toBeNull()
+    expect(j!.linhas.length).toBeLessThanOrEqual(160)
+    expect(j!.linhas.length).toBe(j!.fim - j!.inicio + 1)
+  })
+
+  test("ler retorna null em arquivo inexistente (degrada, não crasha)", async () => {
+    const indice = await indexar(FIX("twilio-refund"), { force: true })
+    expect(await ler(FIX("twilio-refund"), "nao/existe.kt")).toBeNull()
+    expect(indice.simbolos.length).toBeGreaterThan(0)
+  })
+})
+
+describe("navegação — explorar alcança via grafo (o que retrieval lexical não pega)", () => {
+  test("grep num termo + salto de grafo alcança o arquivo vizinho ausente", async () => {
+    const raiz = FIX("twilio-refund")
+    const indice = await indexar(raiz, { force: true })
+    // termo casa o webhook; o WalletService é alcançado pelo salto de call-graph, não por lexico do ticket.
+    const alc = await explorar(raiz, indice, "", { termos: ["processStatusUpdate"], hops: 2 })
+    expect(alc.some((a) => a.arquivo.includes("WalletService"))).toBe(true)
+    const via = alc.find((a) => a.arquivo.includes("WalletService"))!.via
+    expect(via.startsWith("nav:")).toBe(true)
+  })
+
+  test("explorar sem termos que casam não inventa arquivo (não alucina alcance)", async () => {
+    const raiz = FIX("twilio-refund")
+    const indice = await indexar(raiz, { force: true })
+    const alc = await explorar(raiz, indice, "", { termos: ["zzznaoexistezzz"], hops: 2 })
+    expect(alc.length).toBe(0)
+  })
+})
+
+describe("navegação — ranquearCandidatos (locator do gate de custo)", () => {
+  test("termo que casa nome de símbolo rankeia o arquivo no topo, com flag estrutural", async () => {
+    const raiz = FIX("twilio-refund")
+    const indice = await indexar(raiz, { force: true })
+    // `refund` e `wallet` casam símbolo/nome do WalletService → topo + estrutural=true (sinal de confiança).
+    const r = await ranquearCandidatos(raiz, indice, ["refund", "wallet"])
+    expect(r.length).toBeGreaterThan(0)
+    expect(r[0].arquivo).toContain("WalletService")
+    expect(r[0].estrutural).toBe(true)
+  })
+
+  test("termo raro pesa mais que comum (IDF) e sem termos retorna vazio", async () => {
+    const raiz = FIX("twilio-refund")
+    const indice = await indexar(raiz, { force: true })
+    expect(await ranquearCandidatos(raiz, indice, [])).toEqual([])
+    const r = await ranquearCandidatos(raiz, indice, ["zzznaoexistezzz"])
+    expect(r.length).toBe(0)
+  })
+})

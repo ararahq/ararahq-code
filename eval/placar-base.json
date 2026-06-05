@@ -1,20 +1,20 @@
 {
   "roteamento": {
-    "ok": 8,
-    "total": 8
+    "ok": 10,
+    "total": 15
   },
   "contexto": {
-    "ok": 1,
-    "total": 1
+    "ok": 7,
+    "total": 8
   },
   "pares": {
     "ok": 1,
     "total": 1
   },
   "cravou": {
-    "ok": 1,
-    "total": 1
+    "ok": 5,
+    "total": 8
   },
-  "custoUSD": 0.034232,
-  "ms": 33675
+  "custoUSD": 0.2186,
+  "ms": 414000
 }

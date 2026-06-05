@@ -54,12 +54,67 @@ export const CASOS: Caso[] = [
     cravouSe: [/AraraPhoneNumberService\.kt/i, /findFirstByOrganizationIdIsNullAndIsActiveTrue/i],
   },
 
-  // ====== ADICIONE AQUI seus casos reais do monorepo (gabarito que VOCÊ conhece) =============
-  // Diagnóstico (mede contexto grátis + raciocínio pago):
-  //   { id: "ctx-<curto>", prompt: "<sintoma como o usuário descreveria>",
-  //     marchaEsperada: "diagnostico",
-  //     arquivosEsperados: ["<ArquivoOndeMoraACausa>.kt"],
-  //     cravouSe: [/<ArquivoOndeMoraACausa>\.kt/i, /<trecho da correção certa>/i] },
-  // Execução (mede só roteamento, grátis):
-  //   { id: "exec-<curto>", prompt: "<instrução cirúrgica>", marchaEsperada: "execucao" },
+  // ====== Casos reais (sintoma LEIGO, zero dica de arquivo) — fixtures congeladas dos repos =======
+  // Cada um: sintoma como o usuário reportaria + gabarito (arquivo onde mora a causa + cravouSe).
+  // Tier 2 mede se o agente vai do sintoma até a causa sozinho. Fixtures copiadas read-only dos repos.
+
+  // -- Tier 0/1: SDKs (claro, mas "parece certo") --
+  {
+    id: "py-baseurl",
+    prompt: "instalei a lib de python de vocês e não funciona nada, todo cliente que usa python dá erro de conexão. no node funciona normal.",
+    raiz: "fixtures/py-baseurl",
+    marchaEsperada: "diagnostico",
+    arquivosEsperados: ["config.py"],
+    cravouSe: [/config\.py/i, /(arara\.io|base_url|dom[ií]nio|url)/i],
+  },
+  {
+    id: "py-import-morto",
+    prompt: "cliente novo de python não consegue nem começar, dá erro na hora que importa a lib, antes de chamar qualquer coisa. fala algo de pydantic.",
+    raiz: "fixtures/py-import",
+    marchaEsperada: "diagnostico",
+    arquivosEsperados: ["client.py"],
+    cravouSe: [/client\.py/i, /(parse_obj_as|pydantic|import)/i],
+  },
+  {
+    id: "php-templates-recursao",
+    prompt: "o pessoal do php fala que quando lista ou pega um template o negócio trava e estoura memória. parece um loop sem fim.",
+    raiz: "fixtures/php-templates",
+    marchaEsperada: "diagnostico",
+    arquivosEsperados: ["Templates.php"],
+    cravouSe: [/Templates\.php/i, /(recurs|loop|infinit|stack|sombr|shadow|parent::|si mesm)/i],
+  },
+
+  // -- Tier 3: dinheiro/segurança (multi-hop, os discriminadores) --
+  {
+    id: "twilio-estorno-multiplo",
+    prompt: "tá aparecendo crédito do nada na carteira de uns clientes. parece que é quando as mensagens falham — quanto mais falha, mais sobe o saldo.",
+    raiz: "fixtures/twilio-refund",
+    marchaEsperada: "diagnostico",
+    arquivosEsperados: ["TwilioWebhookService.kt"],
+    cravouSe: [/(TwilioWebhookService|WalletService)\.kt/i, /(refund|estorn|idempot|FAILED|dedup|duas vezes)/i],
+  },
+  {
+    id: "stripe-credito-dobrado",
+    prompt: "uns clientes reclamando que recarregaram uma vez só e o saldo veio dobrado, paguei 100 e caiu 200. não é todo mundo, parece aleatório.",
+    raiz: "fixtures/stripe-credit",
+    marchaEsperada: "diagnostico",
+    arquivosEsperados: ["StripeService.kt"],
+    cravouSe: [/(StripeService|WalletService)\.kt/i, /(idempot|dedup|dobr|reentreg|session|addCredit|unique)/i],
+  },
+  {
+    id: "welcome-bonus-rollback",
+    prompt: "cliente paga na abacate ou no stripe e às vezes não cai o crédito, a conta nem ativa. tá pago no provider, mas do nosso lado não entrou.",
+    raiz: "fixtures/welcome-bonus",
+    marchaEsperada: "diagnostico",
+    arquivosEsperados: ["WalletService.kt"],
+    cravouSe: [/WalletService\.kt/i, /(transactional|rollback|requires_new|engol|catch|unexpectedrollback)/i],
+  },
+  {
+    id: "webhook-timing-secret",
+    prompt: "recebi email de um pesquisador: dá pra adivinhar o secret do webhook de vocês medindo o tempo de resposta, ele compara byte a byte. procede?",
+    raiz: "fixtures/webhook-timing",
+    marchaEsperada: "diagnostico",
+    arquivosEsperados: ["AbacatePayWebhookController.kt"],
+    cravouSe: [/(AbacatePayWebhookController|MetaWebhookController)\.kt/i, /(constant|timing|messagedigest|isequal|tempo|byte)/i],
+  },
 ]

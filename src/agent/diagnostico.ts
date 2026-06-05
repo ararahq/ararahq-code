@@ -1,8 +1,9 @@
 import { generateText } from "ai"
 import { extrairEntidades, ehGenerico } from "../engine/marques"
 import { comandoBusca, comandoContagem, rodar } from "../tools"
-import { montarPacote, escoposCitados, superficieDeArquivos } from "./contexto"
+import { montarPacote, escoposCitados } from "./contexto"
 import { localizarArquivo } from "./navegacao"
+import { navegarDiagnostico } from "./navegador"
 import { carregarIndice } from "../conhecimento"
 import { criarResumirFn } from "../context/resumir"
 import { listarFontes } from "../conhecimento/walk"
@@ -499,7 +500,6 @@ export async function diagnosticar(
 }
 
 // Locator (Tier 1 do gate de custo): tradução do sintoma leigo → raízes de código + tamanhos da seleção.
-const TOP_CONFIANTE = 1
 const TOP_SHORTLIST = 3
 const SISTEMA_TERMOS = `Você é um localizador de código. Dado um relato LEIGO de bug, liste de 6 a 10 termos de busca que aparecem LITERALMENTE no código-fonte.
 REGRAS:
@@ -524,37 +524,46 @@ async function traduzirParaTermos(
 }
 
 /**
- * Enriquece material FRACO (sem par preciso) via locator: traduz o sintoma → localiza o arquivo barato →
- * dá a superfície do top-1 (se confiante) ou da shortlist top-5 (senão, o modelo escolhe). É o gate de
- * custo: gasta uma micro-chamada e localiza ANTES de raciocinar, em vez de raciocinar no escuro.
- * Gateado em `pares.length===0` — NÃO toca os casos precisos (par forte) que já cravam (protege o 8/8).
- * Best-effort: qualquer falha degrada pro material original. Retorna o custo da micro-chamada.
+ * Diagnóstico por NAVEGAÇÃO pra material FRACO (sem par preciso): traduz o sintoma → localiza os
+ * candidatos (locator barato) → o modelo NAVEGA o código (abre arquivo, segue call-site, lê o ponto
+ * real) e commita "CAUSA:" ou abstém "NÃO CRAVEI:". Medido na Creditas: cravou 1→5/8, confiante-errado
+ * 5→0/8 com modelo barato — navega até o call-site e pega bug de ausência que grep não acha. Escalar
+ * pro forte foi medido NET-NEGATIVO (não cracka os duros, só custa), então roda 1 modelo barato.
+ * Retorna null pra degradar pro fluxo normal (ex.: sem índice). Gateado pelo chamador em `pares===0`,
+ * protegendo o 8/8 do Arara. Best-effort: erro → null.
  */
-async function enriquecerComLocator(
+async function diagnosticarNavegando(
   input: string,
-  material: Material,
-  model: Parameters<typeof generateText>[0]["model"],
-  custoDe: (inTok: number, outTok: number) => number,
+  cadeia: string[],
+  criarModel: (slug: string) => Parameters<typeof generateText>[0]["model"],
+  custoDe: (slug: string, inTok: number, outTok: number) => number,
   signal?: AbortSignal,
-): Promise<{ inTok: number; outTok: number; custo: number }> {
+): Promise<ResultadoFallback | null> {
   try {
-    const t = await traduzirParaTermos(input, model, signal)
-    const base = { inTok: t.inTok, outTok: t.outTok, custo: custoDe(t.inTok, t.outTok) }
-    if (!t.termos.length) return base
+    const slug = cadeia[0]
+    const model = criarModel(slug)
     const indice = await carregarIndice(process.cwd())
-    if (!indice) return base
-    const loc = await localizarArquivo(process.cwd(), indice, t.termos)
-    const topo = (loc.confiante ? loc.candidatos.slice(0, TOP_CONFIANTE) : loc.candidatos.slice(0, TOP_SHORTLIST)).map((c) => c.arquivo)
-    const sup = topo.length ? await superficieDeArquivos(process.cwd(), topo) : null
-    if (sup) {
-      // SUBSTITUI o material fraco (grep ruidoso) pela superfície localizada — anexar inflava o prompt
-      // e estourava o tempo nos repos grandes. A superfície localizada é o sinal; o resto é ruído.
-      material.texto = sup.texto
-      material.escopado = true
+    if (!indice) return null
+    const t = await traduzirParaTermos(input, model, signal)
+    const candidatos = t.termos.length
+      ? (await localizarArquivo(process.cwd(), indice, t.termos)).candidatos.slice(0, TOP_SHORTLIST).map((c) => c.arquivo)
+      : []
+    const nav = await navegarDiagnostico(input, process.cwd(), indice, candidatos, model, signal)
+    const inTok = t.inTok + nav.inTok
+    const outTok = t.outTok + nav.outTok
+    return {
+      texto: nav.texto,
+      inTok,
+      outTok,
+      rodadas: nav.passos,
+      resolvido: nav.cravou,
+      custoUSD: custoDe(slug, inTok, outTok),
+      modelo: slug,
+      modelosUsados: [slug],
+      cravou: nav.cravou,
     }
-    return base
   } catch {
-    return { inTok: 0, outTok: 0, custo: 0 }
+    return null
   }
 }
 
@@ -575,20 +584,21 @@ export async function diagnosticarComFallback(
   signal?: AbortSignal,
 ): Promise<ResultadoFallback> {
   const material = await reunirMaterial(input)
+  // NAVEGA PRIMEIRO, cadeia precisa como fallback. A navegação tem 0 confiante-errado (medido nos dois
+  // datasets), então só "ganha" o que CRAVA de verdade — pega o estrangeiro/leigo (5/8) e o bug de
+  // ausência (call-site). Quando ela ABSTÉM (caso de par preciso renderizável, o forte do Arara), cai
+  // na cadeia abaixo, que crava esses. Resultado: estrangeiro sobe sem derrubar o 8/8 do Arara.
+  if (cadeia.length) {
+    const nav = await diagnosticarNavegando(input, cadeia, criarModel, custoDe, signal)
+    if (nav?.cravou) {
+      onMapa(material.hits)
+      return nav
+    }
+  }
   let inTok = 0
   let outTok = 0
   let rodadas = 0
   let custo = 0
-  // Gate de custo: material fraco (sem par preciso) → localiza o arquivo barato antes de raciocinar.
-  // Não toca os casos de par forte (protege o 8/8 do Arara). Best-effort, micro-custo.
-  // NOTA: medido na Creditas, escalar a cadeia no localizado é NET-NEGATIVO (escala em localização
-  // confiante-mas-errada → confiante-errado caro + timeout). Mantém 1 passada barata no localizado.
-  if (material.pares.length === 0 && cadeia.length) {
-    const loc = await enriquecerComLocator(input, material, criarModel(cadeia[0]), (i, o) => custoDe(cadeia[0], i, o), signal)
-    inTok += loc.inTok
-    outTok += loc.outTok
-    custo += loc.custo
-  }
   const modelosUsados: string[] = []
   let ultimo: ResultadoDiagnostico = { texto: "", inTok: 0, outTok: 0, rodadas: 0, resolvido: false }
   let modelo = cadeia[0] ?? ""

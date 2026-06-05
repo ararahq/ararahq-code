@@ -2,7 +2,36 @@ import { test, expect, describe, afterEach } from "bun:test"
 import { mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { montarMapaAmplo, montarPacote } from "./contexto"
+import { montarMapaAmplo, montarPacote, parearPorGrafo } from "./contexto"
+
+describe("pareamento genérico (Sinal 1) — sem domínio/JPA", () => {
+  test("pareia métodos irmãos cujos callees são variantes da mesma operação", () => {
+    const chamadas = [
+      { metodo: "assignShared", arquivo: "S.kt", linha: 10, chamada: "findFirstByIsActiveTrue" },
+      { metodo: "pickPool", arquivo: "S.kt", linha: 20, chamada: "findFirstByOrganizationIdIsNullAndIsActiveTrue" },
+      { metodo: "naoRelacionado", arquivo: "S.kt", linha: 30, chamada: "enviarEmailDeBoasVindas" },
+    ]
+    const pares = parearPorGrafo(chamadas, ["shared"])
+    expect(pares.length).toBeGreaterThan(0)
+    expect(`${pares[0].a.chamada}${pares[0].b.chamada}`).toMatch(/findFirst/i)
+  })
+
+  test("callees dissimilares não viram par (não conhece domínio, só estrutura)", () => {
+    const chamadas = [
+      { metodo: "a", arquivo: "S.kt", linha: 10, chamada: "salvarPedido" },
+      { metodo: "b", arquivo: "S.kt", linha: 20, chamada: "calcularImpostoRetido" },
+    ]
+    expect(parearPorGrafo(chamadas, [])).toEqual([])
+  })
+
+  test("genérico em outro domínio (banco): buscaConta vs buscaContaAtiva pareiam", () => {
+    const chamadas = [
+      { metodo: "transferir", arquivo: "Conta.java", linha: 5, chamada: "buscarContaPorTitular" },
+      { metodo: "transferirAtiva", arquivo: "Conta.java", linha: 15, chamada: "buscarContaPorTitularAtiva" },
+    ]
+    expect(parearPorGrafo(chamadas, []).length).toBeGreaterThan(0)
+  })
+})
 
 const homeOriginal = process.env.HOME
 let raiz: string | null = null

@@ -122,31 +122,17 @@ function scoreFoco(c: FocoCand, modo: ModoFoco = "cirurgico"): number {
   return s
 }
 
-// Famílias de operação de repositório/estado. Ordem importa: o mais específico primeiro pra que
-// findFirstBy... seja rotulado "findFirst", não "find".
-const FAMILIAS: { familia: string; re: RegExp }[] = [
-  { familia: "findFirst", re: /^findFirst/i },
-  { familia: "findAll", re: /^findAll/i },
-  { familia: "findBy", re: /^findBy/i },
-  { familia: "find", re: /^find[A-Z]/i },
-  { familia: "save", re: /save/i },
-  { familia: "delete", re: /delete/i },
-  { familia: "update", re: /update/i },
-]
-
-function familiaDe(chamada: string): string | null {
-  for (const { familia, re } of FAMILIAS) if (re.test(chamada)) return familia
-  return null
-}
-
 const MIN_CORPO_METODO = 3
+// Callee curto demais (get, of, to, run) não distingue operação — ignora no pareamento.
+const MIN_LEN_CALLEE = 4
 
-type ChamadaOp = { metodo: string; arquivo: string; linha: number; chamada: string; familia: string }
+type ChamadaOp = { metodo: string; arquivo: string; linha: number; chamada: string }
 
 /**
- * A partir dos arquivos das sementes, coleta as chamadas de operação de repositório de TODOS os
- * métodos com corpo real desses arquivos (incluindo os que o nome não cita a entidade). É a expansão
- * pelo grafo: o campo `chama` já materializado liga método -> operação, sem reler corpo nem grep.
+ * Coleta TODAS as chamadas dos métodos com corpo nos arquivos-foco (via grafo, campo `chama`).
+ * GENÉRICO: não filtra por idioma de framework (nada de "findBy"/"save" do JPA chumbado) — pega o que
+ * o código de fato chama. O que é "comparável" o pareamento decide pela SIMILARIDADE entre os callees
+ * do próprio projeto, não por uma lista de operações conhecida. Roda igual em qualquer stack/domínio.
  */
 function chamadasDeOperacao(indice: Indice, arquivosFoco: Set<string>): ChamadaOp[] {
   const out: ChamadaOp[] = []
@@ -156,8 +142,7 @@ function chamadasDeOperacao(indice: Indice, arquivosFoco: Set<string>): ChamadaO
       const temCorpo = s.tipo === "metodo" || s.tipo === "funcao"
       if (!temCorpo || !s.chama.length || s.linhaFim - s.linhaInicio < MIN_CORPO_METODO) continue
       for (const chamada of s.chama) {
-        const familia = familiaDe(chamada)
-        if (familia) out.push({ metodo: s.nome, arquivo: arq.arquivo, linha: s.linhaInicio, chamada, familia })
+        if (chamada.length >= MIN_LEN_CALLEE) out.push({ metodo: s.nome, arquivo: arq.arquivo, linha: s.linhaInicio, chamada })
       }
     }
   }
@@ -181,25 +166,41 @@ function sufixoComum(x: string, y: string): string {
   return a.slice(a.length - i)
 }
 
-const SUFIXO_INTENCAO = 8
-const TERMOS_SHARED = ["shared", "compartilhado", "compartilhados", "compartilhada", "compartilhadas"]
-const RE_POOL_SEM_DONO = /IsNull|OrganizationIsNull|OrganizationIdIsNull/i
+/** Maior prefixo comum (case-insensitive), em nº de chars. */
+function prefixoComum(x: string, y: string): number {
+  const a = x.toLowerCase()
+  const b = y.toLowerCase()
+  let i = 0
+  while (i < a.length && i < b.length && a[i] === b[i]) i++
+  return i
+}
 
 /**
- * Score do par (a peça que faz o modelo cravar): quão forte é como "caminho A vs B do mesmo bug".
- * - intra-arquivo (mesmo serviço): base +4 (par cross-arquivo nem entra — filtrado antes).
- * - nome de algum método cita a entidade (assignSharedNumber): +3.
- * - mesma intenção de query (sufixo significativo, ex: ...IsActiveTrue): +4 — divergem SÓ no escopo.
- * - sintoma fala de "shared" e uma chamada busca o pool sem dono (OrganizationIdIsNull): +2 — desempata
- *   o caso compartilhado (pool Arara = organization null) entre as candidatas da mesma família.
+ * Similaridade 0..1 entre dois identificadores: quanto do maior é coberto por prefixo+sufixo comum.
+ * Mede "variantes da MESMA intenção" sem conhecer o domínio: findX vs findXSemDono, buscaConta vs
+ * buscaContaAtiva, getUser vs getUserById. É o sinal universal que substitui as famílias JPA chumbadas.
+ */
+function similaridade(x: string, y: string): number {
+  const max = Math.max(x.length, y.length)
+  if (!max) return 0
+  return Math.min(max, prefixoComum(x, y) + sufixoComum(x, y).length) / max
+}
+
+const MIN_SIM_OPERACAO = 0.5
+
+/**
+ * Score do par (a peça que faz o modelo cravar), 100% GENÉRICO — nada de domínio ou framework:
+ * - intra-arquivo (métodos irmãos): base +4.
+ * - nomes dos métodos parecidos (irmãos que deviam agir igual): +0..4 pela similaridade.
+ * - callees são variantes próximas da mesma operação: +0..4 pela similaridade.
+ * - relevância ao sintoma: +3 se o nome de um método casa um termo da query (derivado da query,
+ *   não uma lista de negócio). Roda igual na Arara ou em qualquer outro código.
  */
 function pontuarPar(a: ChamadaOp, b: ChamadaOp, entidades: string[]): number {
   let s = 4
-  const citaNome = (m: string) => entidades.some((e) => m.toLowerCase().includes(e))
-  if (citaNome(a.metodo) || citaNome(b.metodo)) s += 3
-  if (sufixoComum(a.chamada, b.chamada).length >= SUFIXO_INTENCAO) s += 4
-  const temShared = entidades.some((e) => TERMOS_SHARED.includes(e))
-  if (temShared && RE_POOL_SEM_DONO.test(`${a.chamada}${b.chamada}`)) s += 2
+  s += Math.round(similaridade(a.metodo, b.metodo) * 4)
+  s += Math.round(similaridade(a.chamada, b.chamada) * 4)
+  if (entidades.some((e) => a.metodo.toLowerCase().includes(e) || b.metodo.toLowerCase().includes(e))) s += 3
   return s
 }
 
@@ -218,19 +219,16 @@ function* combinar<T>(xs: T[]): Generator<[T, T]> {
  * sem LLM. Vazio se não há divergência clara — aí o gather degrada pro grep.
  */
 export function parearPorGrafo(chamadas: ChamadaOp[], entidades: string[]): ParGrafo[] {
-  const porFamilia = new Map<string, ChamadaOp[]>()
-  for (const c of chamadas) {
-    const lista = porFamilia.get(c.familia) ?? []
-    lista.push(c)
-    porFamilia.set(c.familia, lista)
-  }
-
+  // GENÉRICO: pareia métodos irmãos (mesmo arquivo) cujos callees são VARIANTES da mesma operação
+  // (similaridade >= limiar) mas divergem — "deviam fazer igual, mas um faz diferente". O que conta
+  // como "mesma operação" sai da similaridade entre os nomes reais do projeto, não de lista chumbada.
   const candidatos: ParGrafo[] = []
-  for (const [familia, lista] of porFamilia) {
-    for (const [a, b] of combinar(lista)) {
-      if (a.metodo === b.metodo || a.chamada === b.chamada || a.arquivo !== b.arquivo) continue
-      candidatos.push({ familia, entidade: entidades[0] ?? "", a, b, score: pontuarPar(a, b, entidades) })
-    }
+  for (const [a, b] of combinar(chamadas)) {
+    if (a.arquivo !== b.arquivo || a.metodo === b.metodo || a.chamada === b.chamada) continue
+    if (similaridade(a.chamada, b.chamada) < MIN_SIM_OPERACAO) continue
+    const pre = prefixoComum(a.chamada, b.chamada)
+    const familia = pre >= 3 ? a.chamada.slice(0, pre) : "a mesma operação"
+    candidatos.push({ familia, entidade: entidades[0] ?? "", a, b, score: pontuarPar(a, b, entidades) })
   }
   candidatos.sort(
     (x, y) =>
@@ -250,6 +248,73 @@ export function parearPorGrafo(chamadas: ChamadaOp[], entidades: string[]): ParG
   return out
 }
 
+// Sinal 2 — guardas estruturais UNIVERSAIS (qualquer linguagem/domínio): construções que protegem um
+// fluxo. Divergência nelas entre métodos que tocam a mesma coisa = "um trata, o outro esquece".
+const GUARDAS: { nome: string; re: RegExp }[] = [
+  { nome: "try/catch", re: /\b(try|catch|rescue|except|finally)\b/i },
+  { nome: "transação", re: /transaction|transactional|\brollback\b|\bcommit\b/i },
+  { nome: "checagem-nulo", re: /[!=]==?\s*(null|undefined|none|nil)\b|\bis(null|empty|blank|present)\b|\boptional\b|\?\./i },
+  { nome: "dedupe/idempotência", re: /\b(exists|already|duplicate|idempot\w*|dedup\w*|processed|seen)\b/i },
+  { nome: "lock", re: /\b(lock|synchronized|mutex|semaphore)\b/i },
+]
+
+function featuresGuarda(corpo: string): Set<string> {
+  const f = new Set<string>()
+  for (const g of GUARDAS) if (g.re.test(corpo)) f.add(g.nome)
+  return f
+}
+
+const LINHAS_ANOTACAO = 3
+
+/**
+ * Sinal 2 (guarda): pareia métodos irmãos que tocam a MESMA coisa (compartilham ≥1 callee) mas
+ * divergem numa GUARDA estrutural — um tem try/catch, transação, checagem de nulo ou dedupe que o
+ * outro não tem. Universal: nenhum termo de domínio/framework. Lê o corpo (com as anotações acima da
+ * assinatura) dos métodos do foco. Pega bug de fluxo (rollback que engole, falta de idempotência) que
+ * o Sinal 1 (variante de chamada) não enxerga.
+ */
+async function parearPorGuarda(
+  raiz: string,
+  indice: Indice,
+  foco: Set<string>,
+  entidades: string[],
+): Promise<ParGrafo[]> {
+  type M = { metodo: string; linha: number; callees: string[]; features: Set<string> }
+  const candidatos: ParGrafo[] = []
+  for (const arq of indice.simbolos) {
+    if (!foco.has(arq.arquivo) || ehRepoInterface(arq.arquivo)) continue
+    let linhas: string[]
+    try {
+      linhas = (await Bun.file(`${raiz}/${arq.arquivo}`).text()).split("\n")
+    } catch {
+      continue
+    }
+    const metodos: M[] = []
+    for (const s of arq.simbolos) {
+      if ((s.tipo !== "metodo" && s.tipo !== "funcao") || s.linhaFim - s.linhaInicio < MIN_CORPO_METODO) continue
+      const ini = Math.max(0, s.linhaInicio - 1 - LINHAS_ANOTACAO)
+      const corpo = linhas.slice(ini, s.linhaFim).join("\n")
+      metodos.push({ metodo: s.nome, linha: s.linhaInicio, callees: s.chama, features: featuresGuarda(corpo) })
+    }
+    for (const [a, b] of combinar(metodos)) {
+      const comum = a.callees.find((c) => c.length >= MIN_LEN_CALLEE && b.callees.includes(c))
+      if (!comum) continue
+      const diff = [...a.features].filter((x) => !b.features.has(x)).concat([...b.features].filter((x) => !a.features.has(x)))
+      if (!diff.length) continue
+      let score = 4 + diff.length * 2 + Math.round(similaridade(a.metodo, b.metodo) * 2)
+      if (entidades.some((e) => a.metodo.toLowerCase().includes(e) || b.metodo.toLowerCase().includes(e))) score += 3
+      candidatos.push({
+        familia: `guarda (${diff.join(", ")})`,
+        entidade: entidades[0] ?? "",
+        a: { metodo: a.metodo, arquivo: arq.arquivo, linha: a.linha, chamada: comum },
+        b: { metodo: b.metodo, arquivo: arq.arquivo, linha: b.linha, chamada: comum },
+        score,
+      })
+    }
+  }
+  return candidatos.sort((x, y) => y.score - x.score).slice(0, MAX_PARES)
+}
+
 /** Renderiza os pares como bloco fechado pra injetar ANTES dos trechos no pacote da M3. */
 function renderPares(pares: ParGrafo[], rotulo: string): string {
   if (!pares.length) return ""
@@ -261,7 +326,7 @@ function renderPares(pares: ParGrafo[], rotulo: string): string {
       `CAMINHOS SOBRE "${rotulo}" via ${p.familia} (compare ${i === 0 ? "ESTE primeiro" : "também"}):\n` +
       `  [A] ${a.metodo} (${arq(a)}:${a.linha}) -> ${a.chamada}()\n` +
       `  [B] ${b.metodo} (${arq(b)}:${b.linha}) -> ${b.chamada}()\n` +
-      `  PERGUNTA: ambos lidam com "${rotulo}". Por que [A] e [B] divergem na chamada? Qual causa o sintoma?`
+      `  PERGUNTA: ambos lidam com "${rotulo}". Por que [A] e [B] divergem? Qual causa o sintoma?`
     )
   })
   return `COMPARAÇÃO PAREADA (vinda do índice/grafo — analise, NÃO busque mais):\n\n${blocos.join("\n\n")}`
@@ -714,14 +779,26 @@ export async function montarPacote(
   // Foco rankeado por relevância de domínio (service backend + operação no grafo > telas de UI que
   // só citam a entidade). Cap pra não pagar custo num monorepo onde "shared" aparece em dezenas de
   // lugares. Sem isso, o arquivo-mãe afunda sob ruído de frontend e o par certo nunca é montado.
-  const focoLista = rankearFoco(indice, entidades)
+  let focoLista = rankearFoco(indice, entidades)
     .filter((c) => noEscopo(c.arquivo))
     .slice(0, MAX_ARQUIVOS_FOCO)
     .map((c) => c.arquivo)
+  // Sintoma leigo: o casamento estrito de NOME não achou foco. O retrieval por termos (Marques) DEFINE
+  // o foco a partir do conteúdo — e o pareamento roda sobre ele (não vira só dump de superfície).
+  if (!focoLista.length && subtrees.length === 0) {
+    focoLista = rankearPorTermos(indice, input)
+      .filter((r) => noEscopo(r.arquivo))
+      .slice(0, MAX_FOCO_TERMOS)
+      .map((r) => r.arquivo)
+  }
   const foco = new Set(focoLista)
 
   const chamadas = chamadasDeOperacao(indice, foco)
-  const pares = parearPorGrafo(chamadas, entidades)
+  const paresChamada = parearPorGrafo(chamadas, entidades)
+  // Sinal 2 (guarda): irmãos que tocam a mesma coisa mas divergem num construto universal (try/catch,
+  // transação, nulo, dedupe). Pega bug de fluxo que o Sinal 1 (variante de chamada) não vê.
+  const paresGuarda = paresChamada.length >= MAX_PARES ? [] : await parearPorGuarda(raiz, indice, foco, entidades)
+  const pares = [...paresChamada, ...paresGuarda].slice(0, MAX_PARES)
 
   // Sem par preciso, mas o sintoma aponta um subtree? Entrega o subtree pequeno INTEIRO (superfície
   // escopada) pro modelo escanear — resolve bug de literal/config sem símbolo (base_url, import morto),
@@ -743,33 +820,26 @@ export async function montarPacote(
     }
   }
 
-  // Retrieval por TERMOS (Marques): nenhum par e o casamento estrito de NOME não achou foco. Casa o
-  // sintoma (expandido pela ponte de domínio, aterrada no vocab) contra o perfil de cada arquivo —
-  // acha o alvo quando a palavra do leigo não bate o nome do símbolo ("recarga/saldo" -> addCredit).
-  // Zero token. Entrega a superfície dos top-N pro modelo escanear e apontar arquivo:linha.
-  if (pares.length === 0 && focoLista.length === 0) {
-    const ranqueados = rankearPorTermos(indice, input)
-      .filter((r) => noEscopo(r.arquivo))
-      .slice(0, MAX_FOCO_TERMOS)
-    if (ranqueados.length) {
-      const sup = await superficieDeArquivos(raiz, ranqueados.map((r) => r.arquivo))
-      if (sup) {
-        return {
-          entidades,
-          simbolosCasados: sementes.length,
-          arquivosFoco: sup.arquivos,
-          pares: [],
-          trechos: [],
-          precedentes,
-          texto: sup.texto,
-          forte: true,
-          escopado: true,
-        }
+  // Sem par, mas há foco (estrito ou por termos): dump da superfície dos arquivos achados pro modelo
+  // escanear e apontar arquivo:linha. O foco do sintoma leigo (por termos) já foi resolvido acima.
+  if (pares.length === 0 && focoLista.length > 0) {
+    const sup = await superficieDeArquivos(raiz, focoLista)
+    if (sup) {
+      return {
+        entidades,
+        simbolosCasados: sementes.length,
+        arquivosFoco: sup.arquivos,
+        pares: [],
+        trechos: [],
+        precedentes,
+        texto: sup.texto,
+        forte: true,
+        escopado: true,
       }
     }
   }
 
-  const rotulo = entidades.find((e) => TERMOS_SHARED.includes(e)) ?? entidades[0] ?? "a entidade"
+  const rotulo = entidades[0] ?? "a entidade"
   const mapaSimbolos = simbolosDoMapa(indice, sementes, pares, foco)
   // 1.4 — resumos de 1 linha dos arquivos-foco (cacheados por hash; só gera no cache miss e se há fn).
   const resumos = await gerarResumos(raiz, await alvosResumo(raiz, focoLista), resumir)

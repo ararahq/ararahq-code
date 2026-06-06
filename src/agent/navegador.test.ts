@@ -21,4 +21,14 @@ describe("navegador — ehCravado (commit estruturado)", () => {
   test("CAUSA com hedge (sem ponto concreto) não conta como cravou", () => {
     expect(ehCravado("CAUSA: talvez seja algo relacionado a autenticação, não tenho certeza")).toBe(false)
   })
+
+  test("CAUSA com preâmbulo e bold markdown ainda conta como cravou (não exige começar com CAUSA:)", () => {
+    const texto = "Já identifiquei a causa. Vou sintetizar.\n\n**CAUSA:** src/infra/Mutex.kt:23-36 — lock distribuído não atômico (get+set separados, TOCTOU)."
+    expect(ehCravado(texto)).toBe(true)
+  })
+
+  test("preâmbulo seguido de CAUSA com hedge não conta como cravou", () => {
+    const texto = "Investiguei um pouco.\n\nCAUSA: talvez seja no Mutex, mas não tenho certeza do ponto exato."
+    expect(ehCravado(texto)).toBe(false)
+  })
 })

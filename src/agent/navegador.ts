@@ -119,7 +119,13 @@ export async function navegarDiagnostico(
   return { texto, inTok, outTok, cravou: ehCravado(texto), passos: r.steps?.length ?? 0 }
 }
 
-/** Cravou de verdade? Conclusão começa com "CAUSA:" (não abstenção "NÃO CRAVEI:") e não é hedge. */
+// "CAUSA:" no INÍCIO de qualquer linha, tolerando bold markdown (**CAUSA:**) e indentação. O modelo
+// barato às vezes crava certo mas com preâmbulo ("Já identifiquei a causa. Vou sintetizar.\n\n**CAUSA:**")
+// — exigir que o texto INTEIRO comece com "CAUSA:" rejeitava acerto por formatação, subcontava e ainda
+// escalava pra cadeia cara à toa. Não casa "NÃO CRAVEI:" (linha começa com "NÃO", não "CAUSA:").
+const RE_CAUSA = /^[ \t>*_-]*\*{0,2}\s*CAUSA:/im
+
+/** Cravou de verdade? Tem uma linha "CAUSA:" (não a abstenção "NÃO CRAVEI:") e não é hedge. */
 export function ehCravado(texto: string): boolean {
-  return /^CAUSA:/i.test(texto.trim()) && !detectouHedge(texto)
+  return RE_CAUSA.test(texto.trim()) && !detectouHedge(texto)
 }

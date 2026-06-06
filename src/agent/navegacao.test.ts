@@ -1,9 +1,11 @@
 import { test, expect, describe } from "bun:test"
 import { resolve } from "path"
+import { mkdtempSync, writeFileSync, utimesSync, rmSync } from "node:fs"
+import { tmpdir } from "node:os"
 import { indexar } from "../conhecimento"
 import {
   arquivoDoNo, entrypoints, dirs, listar, simbolosDe, vizinhosArquivo, grep, ler, termosDeBusca, explorar,
-  ranquearCandidatos,
+  ranquearCandidatos, limparCacheConteudo,
 } from "./navegacao"
 
 const FIX = (nome: string) => resolve(import.meta.dir, "../../eval/fixtures", nome)
@@ -87,6 +89,23 @@ describe("navegação — explorar alcança via grafo (o que retrieval lexical n
     const indice = await indexar(raiz, { force: true })
     const alc = await explorar(raiz, indice, "", { termos: ["zzznaoexistezzz"], hops: 2 })
     expect(alc.length).toBe(0)
+  })
+})
+
+describe("navegação — cache de conteúdo (mtime-validado)", () => {
+  test("ler reflete edição (invalida por mtime) e some em arquivo deletado", async () => {
+    limparCacheConteudo()
+    const dir = mkdtempSync(`${tmpdir()}/nav-cache-`)
+    const arq = "f.txt"
+    writeFileSync(`${dir}/${arq}`, "a\nb\nc")
+    expect((await ler(dir, arq, 1, 999))?.linhas).toEqual(["a", "b", "c"])
+    // edita + força mtime futuro (resolução de mtime do FS pode ser grossa) → deve invalidar o cache.
+    writeFileSync(`${dir}/${arq}`, "x\ny")
+    const futuro = new Date(Date.now() + 5000)
+    utimesSync(`${dir}/${arq}`, futuro, futuro)
+    expect((await ler(dir, arq, 1, 999))?.linhas).toEqual(["x", "y"])
+    rmSync(dir, { recursive: true, force: true })
+    expect(await ler(dir, arq)).toBeNull()
   })
 })
 

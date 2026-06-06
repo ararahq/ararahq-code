@@ -8,6 +8,7 @@
 // encadeia sem modelo, pra medir "alcançou o arquivo certo em ≤K passos?" antes de gastar key. Se nem
 // o explorador burro alcança via estas ferramentas, modelo nenhum alcança — conserta a ferramenta.
 
+import { statSync } from "node:fs"
 import type { Indice } from "../conhecimento"
 import type { Simbolo } from "../conhecimento"
 import { perfilTermos, extrairEntidades, ehGenerico } from "../engine/marques"
@@ -16,6 +17,40 @@ const MAX_JANELA_LER = 160
 const MAX_HITS_GREP = 30
 const MAX_TERMOS_BUSCA = 8
 const HOPS_PADRAO = 2
+
+/**
+ * Cache de conteúdo por processo (path -> {mtime, texto, linhas}), VALIDADO por mtime. A navegação
+ * multi-passo relê os milhares de arquivos do repo a cada `grep` (10 passos × várias buscas) — em repo
+ * grande isso é o gargalo (~80s/diagnóstico). Cachear lê do disco 1× e reusa; o check de mtime garante
+ * que um arquivo editado não sirva stale (o diagnóstico é read-only, mas a CLI vive entre operações).
+ * `statSync` é ~100× mais barato que reler o conteúdo. Genérico, sem estado de domínio.
+ */
+const cacheConteudo = new Map<string, { mtimeMs: number; texto: string; linhas: string[] }>()
+
+async function conteudo(raiz: string, arquivo: string): Promise<{ texto: string; linhas: string[] } | null> {
+  const path = `${raiz}/${arquivo}`
+  let mtimeMs: number
+  try {
+    mtimeMs = statSync(path).mtimeMs
+  } catch {
+    return null
+  }
+  const hit = cacheConteudo.get(path)
+  if (hit && hit.mtimeMs === mtimeMs) return hit
+  try {
+    const texto = await Bun.file(path).text()
+    const entrada = { mtimeMs, texto, linhas: texto.split("\n") }
+    cacheConteudo.set(path, entrada)
+    return entrada
+  } catch {
+    return null
+  }
+}
+
+/** Esvazia o cache de conteúdo (uso em teste / após mutações em lote). */
+export function limparCacheConteudo(): void {
+  cacheConteudo.clear()
+}
 
 /** Arquivo dono de um nó do grafo. `f:caminho` → caminho; `s:caminho#nome` → caminho. */
 export function arquivoDoNo(id: string): string {
@@ -137,13 +172,9 @@ export async function grep(
   const re = comoRegex(padrao)
   const hits: { arquivo: string; linha: number; trecho: string }[] = []
   for (const s of indice.simbolos) {
-    let texto: string
-    try {
-      texto = await Bun.file(`${raiz}/${s.arquivo}`).text()
-    } catch {
-      continue
-    }
-    const linhas = texto.split("\n")
+    const c = await conteudo(raiz, s.arquivo)
+    if (!c) continue
+    const linhas = c.linhas
     for (let i = 0; i < linhas.length; i++) {
       if (!re.test(linhas[i])) continue
       hits.push({ arquivo: s.arquivo, linha: i + 1, trecho: linhas[i].trim().slice(0, 200) })
@@ -160,13 +191,9 @@ export async function ler(
   inicio = 1,
   fim = 120,
 ): Promise<{ arquivo: string; inicio: number; fim: number; linhas: string[]; total: number } | null> {
-  let texto: string
-  try {
-    texto = await Bun.file(`${raiz}/${arquivo}`).text()
-  } catch {
-    return null
-  }
-  const todas = texto.split("\n")
+  const c = await conteudo(raiz, arquivo)
+  if (!c) return null
+  const todas = c.linhas
   const i0 = Math.max(1, inicio)
   const i1 = Math.min(todas.length, Math.max(i0, Math.min(fim, i0 + MAX_JANELA_LER - 1)))
   return { arquivo, inicio: i0, fim: i1, linhas: todas.slice(i0 - 1, i1), total: todas.length }
@@ -281,7 +308,7 @@ export async function ranquearCandidatos(raiz: string, indice: Indice, termos: s
   const arquivos = indice.simbolos.map((s) => s.arquivo)
   for (let ini = 0; ini < arquivos.length; ini += LOTE_LEITURA) {
     const lote = arquivos.slice(ini, ini + LOTE_LEITURA)
-    const textos = await Promise.all(lote.map((a) => Bun.file(`${raiz}/${a}`).text().catch(() => null)))
+    const textos = await Promise.all(lote.map(async (a) => (await conteudo(raiz, a))?.texto ?? null))
     for (let j = 0; j < lote.length; j++) {
       const txt = textos[j]
       if (txt == null) continue

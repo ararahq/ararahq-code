@@ -5,7 +5,7 @@ import { tmpdir } from "node:os"
 import { indexar } from "../conhecimento"
 import {
   arquivoDoNo, entrypoints, dirs, listar, simbolosDe, vizinhosArquivo, grep, ler, termosDeBusca, explorar,
-  ranquearCandidatos, limparCacheConteudo,
+  ranquearCandidatos, limparCacheConteudo, alcancavel,
 } from "./navegacao"
 
 const FIX = (nome: string) => resolve(import.meta.dir, "../../eval/fixtures", nome)
@@ -106,6 +106,19 @@ describe("navegação — cache de conteúdo (mtime-validado)", () => {
     expect((await ler(dir, arq, 1, 999))?.linhas).toEqual(["x", "y"])
     rmSync(dir, { recursive: true, force: true })
     expect(await ler(dir, arq)).toBeNull()
+  })
+})
+
+describe("navegação — alcancavel (corroboração: alvo conectado à origem pelo call-graph)", () => {
+  test("alcança via call-graph e nega o desconectado/inexistente", async () => {
+    const raiz = FIX("twilio-refund")
+    const indice = await indexar(raiz, { force: true })
+    const webhook = indice.simbolos.find((s) => s.arquivo.includes("TwilioWebhookService"))!.arquivo
+    const wallet = indice.simbolos.find((s) => s.arquivo.includes("WalletService"))!.arquivo
+    expect(alcancavel(indice, [webhook], wallet, 2)).toBe(true) // webhook → WalletService
+    expect(alcancavel(indice, [wallet], wallet, 2)).toBe(true) // self
+    expect(alcancavel(indice, [webhook], "naoexiste.kt", 2)).toBe(false)
+    expect(alcancavel(indice, [wallet], webhook, 0)).toBe(false) // 0 saltos, alvo != origem
   })
 })
 

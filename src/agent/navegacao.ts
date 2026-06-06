@@ -154,6 +154,32 @@ export function vizinhosArquivo(
   return [...achados.entries()].map(([arq, rel]) => ({ rel, arquivo: arq }))
 }
 
+/**
+ * `alvo` é alcançável a partir de `origens` pelo call-graph (resolução por nome único) em até `hops`
+ * saltos? Base do gate de CORROBORAÇÃO: a causa que o modelo cravou está conectada ao ponto que o
+ * locator achou pelo sintoma, ou veio "do nada" (sinal de confiante-errado)? Determinístico, sem modelo.
+ */
+export function alcancavel(indice: Indice, origens: string[], alvo: string, hops = 2): boolean {
+  if (origens.includes(alvo)) return true
+  const defs = defsPorNome(indice)
+  const visto = new Set(origens)
+  let fronteira = [...origens]
+  for (let h = 0; h < hops && fronteira.length; h++) {
+    const proxima: string[] = []
+    for (const arq of fronteira) {
+      for (const v of vizinhosArquivo(indice, arq, defs)) {
+        if (v.arquivo === alvo) return true
+        if (!visto.has(v.arquivo)) {
+          visto.add(v.arquivo)
+          proxima.push(v.arquivo)
+        }
+      }
+    }
+    fronteira = proxima
+  }
+  return false
+}
+
 function comoRegex(padrao: string): RegExp {
   try {
     return new RegExp(padrao, "i")

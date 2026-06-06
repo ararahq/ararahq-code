@@ -6,7 +6,7 @@
 import { generateText, tool, stepCountIs } from "ai"
 import { z } from "zod"
 import type { Indice } from "../conhecimento"
-import { ler, grep, vizinhosArquivo, simbolosDe } from "./navegacao"
+import { ler, grep, vizinhosArquivo, simbolosDe, alcancavel } from "./navegacao"
 import { detectouHedge } from "./diagnostico"
 
 const MAX_PASSOS = 10
@@ -116,7 +116,18 @@ export async function navegarDiagnostico(
     outTok += f.totalUsage?.outputTokens ?? f.usage?.outputTokens ?? 0
   }
 
-  return { texto, inTok, outTok, cravou: ehCravado(texto), passos: r.steps?.length ?? 0 }
+  let cravou = ehCravado(texto)
+  // Gate de corroboração determinístico: se cravou mas a causa não está ancorada no caminho do sintoma,
+  // rebaixa pra abstenção honesta com a shortlist (filtra confiante-errado; ver corroborarConclusao).
+  if (cravou) {
+    const cor = corroborarConclusao(indice, texto, candidatos)
+    if (!cor.grounded) {
+      const provaveis = candidatos.slice(0, 3).join(", ") || "—"
+      texto = `NÃO CRAVEI: investiguei mas não consegui corroborar a causa no caminho do sintoma (${cor.motivo}). Prováveis: ${provaveis}.`
+      cravou = false
+    }
+  }
+  return { texto, inTok, outTok, cravou, passos: r.steps?.length ?? 0 }
 }
 
 // "CAUSA:" no INÍCIO de qualquer linha, tolerando bold markdown (**CAUSA:**) e indentação. O modelo
@@ -128,4 +139,52 @@ const RE_CAUSA = /^[ \t>*_-]*\*{0,2}\s*CAUSA:/im
 /** Cravou de verdade? Tem uma linha "CAUSA:" (não a abstenção "NÃO CRAVEI:") e não é hedge. */
 export function ehCravado(texto: string): boolean {
   return RE_CAUSA.test(texto.trim()) && !detectouHedge(texto)
+}
+
+// path:linha — pega o caminho de arquivo citado (com extensão de código), com ou sem :linha.
+const RE_ARQUIVO = /([\w./@-]+\.[A-Za-z][A-Za-z0-9]*)/
+
+/** Extrai o arquivo que o modelo cravou na linha CAUSA. Base do gate de corroboração. */
+export function extrairArquivoConcluido(texto: string): string | null {
+  const linha = texto.split("\n").find((l) => RE_CAUSA.test(l.trim()))
+  if (!linha) return null
+  const m = linha.replace(/^.*?CAUSA:/i, "").match(RE_ARQUIVO)
+  return m ? m[1] : null
+}
+
+/**
+ * Resolve um caminho CITADO pra um arquivo REAL do índice (exato → sufixo único → basename único). null
+ * se não casa nada do projeto — citar arquivo inexistente já é sinal de alucinação.
+ */
+export function resolverArquivo(indice: Indice, citado: string): string | null {
+  const arquivos = indice.simbolos.map((s) => s.arquivo)
+  if (arquivos.includes(citado)) return citado
+  const porSufixo = arquivos.filter((a) => a.endsWith(`/${citado}`) || a.endsWith(citado))
+  if (porSufixo.length === 1) return porSufixo[0]
+  const base = citado.split("/").pop() ?? citado
+  const porBase = arquivos.filter((a) => (a.split("/").pop() ?? a) === base)
+  if (porBase.length === 1) return porBase[0]
+  return porSufixo[0] ?? null
+}
+
+export type Corroboracao = { grounded: boolean; arquivo: string | null; motivo: string }
+
+/**
+ * Gate de CORROBORAÇÃO (abstenção honesta + variância estrutural num mecanismo só). A causa que o modelo
+ * cravou está ANCORADA no que o locator achou pelo sintoma — mesmo arquivo, ou alcançável pelo call-graph
+ * em ≤2 saltos? Se NÃO (não-candidato, não-alcançável, ou arquivo inexistente), a conclusão veio "do
+ * nada" relativo ao sintoma = sinal forte de confiante-errado → o chamador rebaixa pra abstenção. É
+ * determinístico (custo ~zero, sem modelo, sem passo extra de navegação) e a decisão de aceitar deixa de
+ * depender da auto-confiança ruidosa do modelo → o lixo desconectado é filtrado de forma estável (menos
+ * variância no que é ACEITO). Leniente de propósito: sem candidatos, não rebaixa (não pune locator vazio).
+ */
+export function corroborarConclusao(indice: Indice, texto: string, candidatos: string[]): Corroboracao {
+  const citado = extrairArquivoConcluido(texto)
+  if (!citado) return { grounded: false, arquivo: null, motivo: "sem arquivo na conclusão" }
+  const arquivo = resolverArquivo(indice, citado)
+  if (!arquivo) return { grounded: false, arquivo: citado, motivo: "arquivo citado não existe no índice" }
+  if (!candidatos.length) return { grounded: true, arquivo, motivo: "sem candidatos pra corroborar" }
+  if (candidatos.includes(arquivo)) return { grounded: true, arquivo, motivo: "é candidato do locator" }
+  if (alcancavel(indice, candidatos, arquivo, 2)) return { grounded: true, arquivo, motivo: "alcançável pelo call-graph" }
+  return { grounded: false, arquivo, motivo: "desconectado do sintoma (não-candidato, não-alcançável)" }
 }

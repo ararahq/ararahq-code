@@ -2,7 +2,7 @@ import { generateText } from "ai"
 import { extrairEntidades, ehGenerico } from "../engine/marques"
 import { comandoBusca, comandoContagem, rodar } from "../tools"
 import { montarPacote, escoposCitados } from "./contexto"
-import { localizarArquivo } from "./navegacao"
+import { localizarComSmell } from "./smells"
 import { navegarDiagnostico } from "./navegador"
 import { verificarCausa, extrairCausaAlvo } from "./verificador"
 import { carregarIndice } from "../conhecimento"
@@ -546,9 +546,11 @@ async function diagnosticarNavegando(
     const indice = await carregarIndice(process.cwd())
     if (!indice) return null
     const t = await traduzirParaTermos(input, model, signal)
-    const candidatos = t.termos.length
-      ? (await localizarArquivo(process.cwd(), indice, t.termos)).candidatos.slice(0, TOP_SHORTLIST).map((c) => c.arquivo)
-      : []
+    // Locator combinado: lexical (IDF + match estrutural) + dicionário de smells (grep por MECANISMO do
+    // sintoma). Medido grátis nos fixtures: 0→4/8 gabaritos no top-3 vs lexical puro, sem custo de modelo.
+    const candidatos = (await localizarComSmell(process.cwd(), indice, input, t.termos))
+      .slice(0, TOP_SHORTLIST)
+      .map((c) => c.arquivo)
     const nav = await navegarDiagnostico(input, process.cwd(), indice, candidatos, model, signal)
     let texto = nav.texto
     let cravou = nav.cravou

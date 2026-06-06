@@ -4,6 +4,7 @@ import { comandoBusca, comandoContagem, rodar } from "../tools"
 import { montarPacote, escoposCitados } from "./contexto"
 import { localizarArquivo } from "./navegacao"
 import { navegarDiagnostico } from "./navegador"
+import { verificarCausa, extrairCausaAlvo } from "./verificador"
 import { carregarIndice } from "../conhecimento"
 import { criarResumirFn } from "../context/resumir"
 import { listarFontes } from "../conhecimento/walk"
@@ -549,18 +550,42 @@ async function diagnosticarNavegando(
       ? (await localizarArquivo(process.cwd(), indice, t.termos)).candidatos.slice(0, TOP_SHORTLIST).map((c) => c.arquivo)
       : []
     const nav = await navegarDiagnostico(input, process.cwd(), indice, candidatos, model, signal)
-    const inTok = t.inTok + nav.inTok
-    const outTok = t.outTok + nav.outTok
+    let texto = nav.texto
+    let cravou = nav.cravou
+    let inTok = t.inTok + nav.inTok
+    let outTok = t.outTok + nav.outTok
+    let custo = custoDe(slug, inTok, outTok)
+    const modelosUsados = [slug]
+
+    // Escalonamento SELETIVO (verificador sintoma→causa): se o BARATO cravou, o FORTE faz UMA verificação
+    // — lê só a janela do ponto e julga, cético, se aquele código produz ESTE sintoma. Pega o
+    // "grounded-but-wrong" (bug real, arquivo plausível, mas não o do ticket), que confiança não pega.
+    // Não confirmou → rebaixa pra abstenção honesta. O caro entra só no passo decisivo, não no repo cego.
+    const alvo = cravou ? extrairCausaAlvo(texto) : null
+    if (alvo) {
+      const slugForte = cadeia[2] ?? cadeia[cadeia.length - 1]
+      const v = await verificarCausa(input, process.cwd(), alvo.arquivo, alvo.linha, criarModel(slugForte), signal)
+      inTok += v.inTok
+      outTok += v.outTok
+      custo += custoDe(slugForte, v.inTok, v.outTok)
+      modelosUsados.push(slugForte)
+      if (!v.confirma) {
+        const provaveis = candidatos.slice(0, 3).join(", ") || "—"
+        texto = `NÃO CRAVEI: o verificador não confirmou que ${alvo.arquivo}:${alvo.linha} causa o sintoma (${v.motivo.split("\n")[0]}). Prováveis: ${provaveis}.`
+        cravou = false
+      }
+    }
+
     return {
-      texto: nav.texto,
+      texto,
       inTok,
       outTok,
       rodadas: nav.passos,
-      resolvido: nav.cravou,
-      custoUSD: custoDe(slug, inTok, outTok),
+      resolvido: cravou,
+      custoUSD: custo,
       modelo: slug,
-      modelosUsados: [slug],
-      cravou: nav.cravou,
+      modelosUsados,
+      cravou,
     }
   } catch {
     return null

@@ -22,6 +22,10 @@ describe("smells — smellsAtivos (intent match, o elo determinístico)", () => 
     expect(smellsAtivos("qualquer um entra sem senha nenhuma, senha em branco passa").map((s) => s.classe)).toContain("fail-open-auth")
   })
 
+  test("'dá pra forjar a assinatura do webhook' ativa timing-compare", () => {
+    expect(smellsAtivos("segurança falou que dá pra forjar a assinatura do webhook e se passar").map((s) => s.classe)).toContain("timing-compare")
+  })
+
   test("sintoma genérico sem mecanismo não ativa nada (não chuta)", () => {
     expect(smellsAtivos("o sistema tá meio lento hoje de manhã")).toHaveLength(0)
   })

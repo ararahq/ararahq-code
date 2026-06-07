@@ -12,8 +12,16 @@ import { grep, ranquearCandidatos, type Candidato } from "./navegacao"
 
 export type Smell = { classe: string; intencao: RegExp; padrao: string }
 
+// Arquivo de TESTE/fixture/mock — um anti-padrão aqui quase nunca é o bug de PRODUÇÃO (foi o que eu
+// rejeitei em toda jogada manual: hits de "segredo" eram 100% teste; o top candidato do #18 era MutexTest).
+// Path-based, geral, zero modelo. Conserta também o locator lexical (que surfava o arquivo de teste no topo).
+export function ehArquivoDeTeste(caminho: string): boolean {
+  return /(^|\/)(tests?|specs?|__tests__|__mocks__)(\/|$)|\.(test|spec)\.[a-z]+$|(Test|Tests|Spec|IT)\.[A-Za-z]+$/.test(caminho)
+}
+
 export const SMELLS: Smell[] = [
-  { classe: "stub", intencao: /n[ãa]o? termin|inacab|pela metade|nem (feito|fizeram|terminaram)|incomplet|n[ãa]o (foi|ta) (feito|pronto)/i, padrao: "TODO\\(|not yet impl|notimplementederror|FIXME\\b" },
+  // stub: só as formas que ESTOURAM em runtime (TODO()/NotImplemented), não comentário "// TODO"/FIXME (benigno).
+  { classe: "stub", intencao: /n[ãa]o? termin|inacab|pela metade|nem (feito|fizeram|terminaram)|incomplet|n[ãa]o (foi|ta) (feito|pronto)/i, padrao: "TODO\\(|not yet impl|notimplementederror|raise NotImplemented|throw.{0,20}NotImplemented" },
   { classe: "dedup", intencao: /pessoa errada|destinat[aá]ri|trocou (o|a)|foi pra (outr|quem)|mensagem.*(errad|trocad)/i, padrao: "distinctBy|associateBy|groupBy|\\.toMap\\(|dedup" },
   { classe: "error-class", intencao: /culpa.*client|sempre.*(erro|falh)|n[ãa]o.*(retent|tenta de novo)|trata.*erro.*errad/i, padrao: "statusCode|\\bit\\.code\\b|CLIENT_ERROR|SERVER_ERROR|getOrElse" },
   { classe: "fail-open-auth", intencao: /sem senha|senha em branco|qualquer um (entra|acessa|passa)|sem (credencial|autentic)|libera(do)? sem/i, padrao: "process\\.env\\.[A-Z_]*(PASS|USER|SECRET|TOKEN)|verify\\s*=\\s*false|===\\s*process\\.env" },
@@ -45,13 +53,23 @@ export async function localizarComSmell(
   const scoreLex = new Map(lexical.map((c) => [c.arquivo, c.score]))
   // Pool ESTREITO do smell (mecanismo), ranqueado por relevância lexical DENTRO do pool (mecanismo +
   // sintoma = topo). Unir a lista lexical inteira afogava (centenas de arquivos); aqui fica ~20.
+  // Anota o sinal sistêmico (×N) quando o anti-padrão repete — confiança + indica fix sistêmico.
   const smellRanked = (await localizarPorSmell(raiz, indice, sintoma))
-    .map((s) => ({ arquivo: s.arquivo, score: (scoreLex.get(s.arquivo) ?? 0) + BONUS_SMELL, estrutural: false, termos: [`smell:${s.classe}`] }))
+    .map((s) => ({
+      arquivo: s.arquivo,
+      score: (scoreLex.get(s.arquivo) ?? 0) + BONUS_SMELL,
+      estrutural: false,
+      termos: [s.sistemico > 1 ? `smell:${s.classe}×${s.sistemico}` : `smell:${s.classe}`],
+    }))
     .sort((a, b) => b.score - a.score || a.arquivo.localeCompare(b.arquivo))
   // Fallback: top lexical não-coberto pelo smell (pros casos em que nenhum smell casa, ex. semântica de SDK).
   const vistos = new Set(smellRanked.map((c) => c.arquivo))
   const fallback = lexical.filter((c) => !vistos.has(c.arquivo)).slice(0, maxFallback)
-  return [...smellRanked, ...fallback]
+  // Deprioritiza TESTE: arquivo de teste afunda pro fim (nunca é a causa do sintoma de produção). Conserta
+  // o caso real medido — o locator lexical surfava MutexTest.kt no topo em vez de Mutex.kt.
+  return [...smellRanked, ...fallback].sort(
+    (a, b) => (ehArquivoDeTeste(a.arquivo) ? 1 : 0) - (ehArquivoDeTeste(b.arquivo) ? 1 : 0),
+  )
 }
 
 /** Quais smells o RELATO ativa (intent match). Puro, testável — separa o elo frágil (frase) do grep. */
@@ -71,17 +89,21 @@ export async function localizarPorSmell(
   indice: Indice,
   sintoma: string,
   maxArquivos = 20,
-): Promise<{ arquivo: string; classe: string }[]> {
-  const out: { arquivo: string; classe: string }[] = []
+): Promise<{ arquivo: string; classe: string; sistemico: number }[]> {
+  const bruto: { arquivo: string; classe: string }[] = []
   const vistos = new Set<string>()
   for (const s of smellsAtivos(sintoma)) {
-    // dedup por ARQUIVO (não por hit): um arquivo com 20 TODOs não pode crowd-out os outros candidatos.
+    // dedup por ARQUIVO (não por hit); pula TESTE (anti-padrão em teste ≠ bug de produção).
     for (const h of await grep(raiz, indice, s.padrao, HITS_POR_GREP)) {
-      if (vistos.has(h.arquivo)) continue
+      if (vistos.has(h.arquivo) || ehArquivoDeTeste(h.arquivo)) continue
       vistos.add(h.arquivo)
-      out.push({ arquivo: h.arquivo, classe: s.classe })
-      if (out.length >= maxArquivos) return out
+      bruto.push({ arquivo: h.arquivo, classe: s.classe })
+      if (bruto.length >= maxArquivos) break
     }
+    if (bruto.length >= maxArquivos) break
   }
-  return out
+  // sinal SISTÊMICO: quantos arquivos compartilham a classe (anti-padrão repetido = mais confiável + fix sistêmico).
+  const porClasse = new Map<string, number>()
+  for (const b of bruto) porClasse.set(b.classe, (porClasse.get(b.classe) ?? 0) + 1)
+  return bruto.map((b) => ({ ...b, sistemico: porClasse.get(b.classe) ?? 1 }))
 }

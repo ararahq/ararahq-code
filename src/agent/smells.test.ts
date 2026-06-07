@@ -1,7 +1,7 @@
 import { test, expect, describe } from "bun:test"
 import { resolve } from "path"
 import { indexar } from "../conhecimento"
-import { smellsAtivos, localizarComSmell } from "./smells"
+import { smellsAtivos, localizarComSmell, ehArquivoDeTeste } from "./smells"
 
 const FIX = (nome: string) => resolve(import.meta.dir, "../../eval/fixtures", nome)
 
@@ -28,6 +28,19 @@ describe("smells — smellsAtivos (intent match, o elo determinístico)", () => 
 
   test("sintoma genérico sem mecanismo não ativa nada (não chuta)", () => {
     expect(smellsAtivos("o sistema tá meio lento hoje de manhã")).toHaveLength(0)
+  })
+})
+
+describe("smells — ehArquivoDeTeste (filtro de precisão grátis)", () => {
+  test("reconhece test-code por path e por sufixo", () => {
+    for (const p of ["src/foo/bar.test.ts", "app/tests/unit/x.py", "a/__tests__/b.js", "app/MutexTest.kt", "x/FooSpec.kt"]) {
+      expect(ehArquivoDeTeste(p)).toBe(true)
+    }
+  })
+  test("não confunde código de produção (Latest, contest, Service)", () => {
+    for (const p of ["app/infra/mutex/Mutex.kt", "src/WalletService.kt", "src/Latest.kt", "app/contest/Form.kt"]) {
+      expect(ehArquivoDeTeste(p)).toBe(false)
+    }
   })
 })
 

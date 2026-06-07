@@ -6,6 +6,7 @@ import { provedor } from "./llm/openrouter"
 import { carregarContexto } from "./context/projeto"
 import { garantirSintese, inicializarProjeto } from "./context/init"
 import { custoSessao, custoMes, mesAtual, historicoTarefas } from "./agent/custo"
+import { descobrirSkills } from "./skills/skills"
 
 let encerrando = false
 function sair(): never {
@@ -35,6 +36,7 @@ try {
 function ajuda() {
   ui.subItem("/ajuda    esta ajuda")
   ui.subItem("/init     explora o projeto e cria/atualiza o ARARA.md")
+  ui.subItem("/skills   lista as skills instaladas que a Jade descobriu")
   ui.subItem("/custo    mostra o custo acumulado (sessão e mês)")
   ui.subItem("/undo     reverte a última edição de arquivo")
   ui.subItem("/sair     encerra (ou Ctrl+C)")
@@ -55,6 +57,17 @@ while (true) {
   }
   if (cmd === "/init") {
     await inicializarProjeto()
+    continue
+  }
+  if (cmd === "/skills") {
+    const skills = await descobrirSkills(process.cwd())
+    if (!skills.length) {
+      ui.info("nenhuma skill encontrada.")
+      ui.subItem("instale skills em .claude/skills/, ~/.claude/skills/ ou aponte ARARA_SKILLS_DIRS")
+    } else {
+      ui.info(`${skills.length} skill(s) instalada(s):`)
+      for (const s of skills) ui.subItem(`${s.nome} (${s.origem})${s.descricao ? ` — ${s.descricao}` : ""}`)
+    }
     continue
   }
   if (cmd === "/custo") {

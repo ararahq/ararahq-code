@@ -50,6 +50,7 @@ import {
   type SubFeito,
 } from "./maestro"
 import { ui } from "../terminal/ui"
+import { selecionarSkills, montarBlocoSkills } from "../skills/skills"
 
 type Msg = { role: "user" | "assistant"; content: string }
 
@@ -87,6 +88,9 @@ REGRAS PERMANENTES (os dois modos):
 
 CONTEXTO DO PROJETO (memória acumulada):
 {memoria_projeto}
+
+SKILLS ATIVADAS (instruções especializadas que casaram com esta tarefa — siga-as como parte do método):
+{skills}
 
 PLANO DA TAREFA ATUAL:
 {plano_execucao}
@@ -132,8 +136,9 @@ MUDANÇAS RANQUEADAS POR IMPORTÂNCIA (Marques):
 DIFF:
 {diff}`
 
-function montarSistema(memoria: string, plano: string, contexto: string): string {
+function montarSistema(memoria: string, plano: string, contexto: string, skills = ""): string {
   return SYSTEM_BASE.replace("{memoria_projeto}", memoria || "(sem memória registrada)")
+    .replace("{skills}", skills || "(nenhuma skill casou com esta tarefa)")
     .replace("{plano_execucao}", plano || "(sem plano — tarefa direta)")
     .replace("{contexto_cirurgico}", contexto || "(nenhum — modo execução)")
 }
@@ -429,6 +434,7 @@ async function tentarTestTimeCompute(
   input: string,
   openrouter: ReturnType<typeof provedor>,
   ctx: { completo: string },
+  skills = "",
 ): Promise<ResultadoTTC> {
   const acR = new AbortController()
   _abort = acR
@@ -459,7 +465,7 @@ async function tentarTestTimeCompute(
   if (!candidatos.length) return { ok: false, texto: "", tokens, custoUSD: custo }
   logInterno(`test-time-compute: ${candidatos.length} candidatos, selecionando por verificação`)
 
-  const sistema = montarSistema(ctx.completo, "", "")
+  const sistema = montarSistema(ctx.completo, "", "", skills)
   let marca = 0
   const sel = await selecionarPorVerificacao(
     candidatos.length,
@@ -504,6 +510,7 @@ async function orquestrarComplexo(
   input: string,
   openrouter: ReturnType<typeof provedor>,
   ctx: { completo: string; resumo: string },
+  skills = "",
 ): Promise<boolean> {
   const inicio = Date.now()
   const acP = new AbortController()
@@ -526,7 +533,7 @@ async function orquestrarComplexo(
   let custoTotal = custoUSD(MODELOS.diagnostico, dec.inTok, dec.outTok)
   const feitos: SubFeito[] = []
   const passoRef = { atual: 0 }
-  const sistema = montarSistema(ctx.completo, "", "")
+  const sistema = montarSistema(ctx.completo, "", "", skills)
   historico.push({ role: "user", content: input })
 
   const finalizar = (rel: string) => {
@@ -684,10 +691,25 @@ export async function processar(input: string) {
 
   ui.jade(rotuloModo(modo))
 
+  // Skills: ativação DETERMINÍSTICA (Marques, zero modelo) das instruções especializadas instaladas
+  // (Claude/projeto/outras) que casam com a tarefa. Progressive disclosure — só o corpo da skill que
+  // casou entra no prompt. Degrada com graça: skill é auxiliar, falha aqui não derruba a tarefa.
+  let blocoSkills = ""
+  try {
+    const skillsAtivas = await selecionarSkills(input, process.cwd())
+    if (skillsAtivas.length) {
+      ui.subItem(`skill: ${skillsAtivas.map((s) => s.nome).join(", ")}`)
+      logInterno(`skills ativadas=[${skillsAtivas.map((s) => `${s.nome}(${s.origem})`).join(", ")}]`)
+      blocoSkills = montarBlocoSkills(skillsAtivas)
+    }
+  } catch (e) {
+    logInterno(`skills: falha ao ativar (${msgErro(e)})`)
+  }
+
   // Tarefa COMPLEXA (marcha de loop longo): o Maestro decompõe em sub-objetivos e orquestra cada um
   // na máquina provada, com checkpoint. Se a decomposição for atômica/falhar, segue o caminho normal.
   if (!heranca && ehComplexo(decisao)) {
-    const tratado = await orquestrarComplexo(input, openrouter, ctx)
+    const tratado = await orquestrarComplexo(input, openrouter, ctx, blocoSkills)
     if (tratado) return
   }
 
@@ -717,7 +739,7 @@ export async function processar(input: string) {
       }
       // naoCravou — 3.4 test-time compute antes de desistir: gera N candidatos em paralelo e aplica o
       // que passa no build (seleção por verificação). Só fecha se UM verifica verde de verdade.
-      const ttc = await tentarTestTimeCompute(input, openrouter, ctx)
+      const ttc = await tentarTestTimeCompute(input, openrouter, ctx, blocoSkills)
       if (ttc.ok) {
         const respostaTTC = `Cravei por verificação: gerei ${N_CANDIDATOS_TTC} hipóteses em paralelo e apliquei a que fechou o build.\n\n${ttc.texto}`
         try {
@@ -784,7 +806,7 @@ export async function processar(input: string) {
   }
 
   const passoRef = { atual: 0 }
-  const sistema = montarSistema(ctx.completo, plano.map((p, i) => `${i + 1}. ${p.texto}`).join("\n"), contextoCirurgico)
+  const sistema = montarSistema(ctx.completo, plano.map((p, i) => `${i + 1}. ${p.texto}`).join("\n"), contextoCirurgico, blocoSkills)
   const toolset: Toolset = plano.length
     ? { ...ferramentas, concluir_passo: fazerConcluirPasso(plano, passoRef) }
     : ferramentas

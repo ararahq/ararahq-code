@@ -53,6 +53,21 @@ Problema complexo **não** é um problema maior — é uma **sequência de probl
 
 O pulo do gato: cada sub-objetivo é uma execução nova, então **a trava de trajetória (16 passos) reseta por sub-objetivo** — 8 sub-objetivos × 16 passos = 128 passos no total, cada um verificado. Tarefa simples gera UM sub-objetivo e passa direto, sem overhead. **Mesmo agente, do trivial ao complexo** — a diferença é orquestração, não um modelo mais esperto.
 
+## Skills — instrução especializada plug-and-play
+
+A Jade aproveita as skills **já instaladas** no formato aberto do Claude (`SKILL.md` com frontmatter `name`/`description` + corpo em markdown) — sem reescrever nada. O pulo do gato é manter a tese: a **seleção é determinística** (Marques, zero modelo) e com **progressive disclosure**.
+
+1. **Descobre** as skills nas raízes, da mais específica pra mais ampla: `.claude/skills/` e `.arara/skills/` do projeto, depois `~/.claude/skills/` e `~/.arara/skills/`, e qualquer pasta extra via `ARARA_SKILLS_DIRS` (pra skills de outro agente/LLM). Mesmo nome: o projeto vence o global.
+2. **Ativa** só a(s) skill(s) cuja descrição **casa** com a tarefa, pontuando os termos em comum (`perfilTermos`) — nunca chama modelo pra escolher. Casa contra os **metadados** (nome+descrição), não contra o corpo.
+3. **Injeta** apenas o corpo da skill que casou no system prompt (sanitizado, com teto de tamanho). Nenhuma casou? Bloco vazio — zero token desperdiçado.
+
+```bash
+/skills                                   # lista o que a Jade descobriu (nome, origem, descrição)
+export ARARA_SKILLS_DIRS="/caminho/skills:/outro/caminho"   # skills de fora (ex.: outro LLM)
+```
+
+> Skill é a Camada 1/2 aplicada a procedimento: o trabalho barato (achar a instrução certa) acontece antes, sem pagar modelo. O modelo forte recebe o playbook já mastigado em vez de adivinhar o método.
+
 ## Jade — as 5 marchas
 
 O usuário **sempre vê só "Jade"**. Por baixo, cada marcha é um modelo diferente, roteado pela Camada 3. A façade é parte do produto.
@@ -117,6 +132,7 @@ src/
 │  ├─ planner.ts       decomposição multi-passo
 │  └─ custo.ts         telemetria interna por tarefa
 ├─ conhecimento/       Camada 1 — índice, grafo, stack, símbolos, memória
+├─ skills/             descoberta + ativação determinística de skills (formato Claude)
 ├─ engine/marques.ts   classificador de modo/sinais (stack trace, tamanho, hedge)
 ├─ llm/                provedores OpenRouter + Ollama
 ├─ security/sanitize.ts redação de secrets, path safety
@@ -160,6 +176,7 @@ Versão atual: **0.1.17**.
 
 ## Roadmap
 
+- [x] 5.0 — skills no formato aberto do Claude, com ativação determinística (Marques)
 - [ ] 2.4 — subagente de busca isolado
 - [ ] 4.3 — checkpointing por sub-objetivo em loops longos
 - [ ] 1.4 — geração de resumos de arquivo sob demanda

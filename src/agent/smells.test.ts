@@ -1,7 +1,15 @@
 import { test, expect, describe } from "bun:test"
 import { resolve } from "path"
 import { indexar } from "../conhecimento"
-import { smellsAtivos, localizarComSmell, ehArquivoDeTeste } from "./smells"
+import { smellsAtivos, localizarComSmell, ehArquivoDeTeste, extDe, SMELLS } from "./smells"
+
+describe("smells — extDe (linguagem do arquivo, derivada da extensão)", () => {
+  test("pega a extensão minúscula; vazio sem ponto", () => {
+    expect(extDe("a/b/Foo.java")).toBe("java")
+    expect(extDe("x.PY")).toBe("py")
+    expect(extDe("semponto")).toBe("")
+  })
+})
 
 const FIX = (nome: string) => resolve(import.meta.dir, "../../eval/fixtures", nome)
 
@@ -24,6 +32,18 @@ describe("smells — smellsAtivos (intent match, o elo determinístico)", () => 
 
   test("'dá pra forjar a assinatura do webhook' ativa timing-compare", () => {
     expect(smellsAtivos("segurança falou que dá pra forjar a assinatura do webhook e se passar").map((s) => s.classe)).toContain("timing-compare")
+  })
+
+  test("'condição nunca pega' ativa wrong-equality nos packs Java E Python (conceito agnóstico)", () => {
+    const cs = smellsAtivos("a comparação de string não funciona, a condição nunca pega").map((s) => s.classe)
+    expect(cs).toContain("eq-java")
+    expect(cs).toContain("eq-python")
+  })
+
+  test("eq-java é gateado pra .java; eq-python pra .py (não misfira entre linguagens)", () => {
+    expect(SMELLS.find((s) => s.classe === "eq-java")?.langs).toEqual(["java"])
+    expect(SMELLS.find((s) => s.classe === "eq-python")?.langs).toEqual(["py"])
+    expect(SMELLS.find((s) => s.classe === "cors-wildcard")?.langs).toBeUndefined() // universal
   })
 
   test("sintoma genérico sem mecanismo não ativa nada (não chuta)", () => {

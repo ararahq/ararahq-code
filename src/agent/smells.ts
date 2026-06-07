@@ -10,7 +10,12 @@
 import type { Indice } from "../conhecimento"
 import { grep, ranquearCandidatos, type Candidato } from "./navegacao"
 
-export type Smell = { classe: string; intencao: RegExp; padrao: string }
+// `langs` = extensões em que o padrão é VÁLIDO (vazio = universal). AGNOSTICISMO: a Jade roda em qualquer
+// linguagem; o CONCEITO do anti-padrão é universal, mas a ASSINATURA é específica — e `==` é o exemplo
+// perfeito: `x == "lit"` é BUG em Java, mas CORRETO em Python/Kotlin (lá `==` compara valor). Um padrão
+// chapado misfiraria em Python. Então gateamos pela extensão do arquivo (derivada do repo real, não tabela
+// global chumbada). Em repo Python, o pack Java nem é avaliado → zero falso-positivo entre linguagens.
+export type Smell = { classe: string; intencao: RegExp; padrao: string; langs?: string[] }
 
 // Arquivo de TESTE/fixture/mock — um anti-padrão aqui quase nunca é o bug de PRODUÇÃO (foi o que eu
 // rejeitei em toda jogada manual: hits de "segredo" eram 100% teste; o top candidato do #18 era MutexTest).
@@ -19,13 +24,27 @@ export function ehArquivoDeTeste(caminho: string): boolean {
   return /(^|\/)(tests?|specs?|__tests__|__mocks__)(\/|$)|\.(test|spec)\.[a-z]+$|(Test|Tests|Spec|IT)\.[A-Za-z]+$/.test(caminho)
 }
 
+/** Extensão (minúscula) do caminho — a "linguagem" do arquivo, derivada do próprio repo (não chumbada). */
+export function extDe(caminho: string): string {
+  const i = caminho.lastIndexOf(".")
+  return i < 0 ? "" : caminho.slice(i + 1).toLowerCase()
+}
+
 export const SMELLS: Smell[] = [
   // stub: só as formas que ESTOURAM em runtime (TODO()/NotImplemented), não comentário "// TODO"/FIXME (benigno).
   { classe: "stub", intencao: /n[ãa]o? termin|inacab|pela metade|nem (feito|fizeram|terminaram)|incomplet|n[ãa]o (foi|ta) (feito|pronto)/i, padrao: "TODO\\(|not yet impl|notimplementederror|raise NotImplemented|throw.{0,20}NotImplemented" },
   { classe: "dedup", intencao: /pessoa errada|destinat[aá]ri|trocou (o|a)|foi pra (outr|quem)|mensagem.*(errad|trocad)/i, padrao: "distinctBy|associateBy|groupBy|\\.toMap\\(|dedup" },
   { classe: "error-class", intencao: /culpa.*client|sempre.*(erro|falh)|n[ãa]o.*(retent|tenta de novo)|trata.*erro.*errad/i, padrao: "statusCode|\\bit\\.code\\b|CLIENT_ERROR|SERVER_ERROR|getOrElse" },
   { classe: "fail-open-auth", intencao: /sem senha|senha em branco|qualquer um (entra|acessa|passa)|sem (credencial|autentic)|libera(do)? sem/i, padrao: "process\\.env\\.[A-Z_]*(PASS|USER|SECRET|TOKEN)|verify\\s*=\\s*false|===\\s*process\\.env" },
-  { classe: "timing-compare", intencao: /forj(ar|a|am)|se passar (por|como)|assinatura (fraca|falsa|burl)|d[áa] pra (passar|forjar|fingir|burlar)|seguran[çc]a (falou|disse|achou)|burlar|spoofar/i, padrao: "(signature|hmac|verifytoken|verify_token|digest|secret)\\s*(==|!=)|\\.equals\\([^)]*(signature|hmac|token|secret)" },
+  // timing-compare: exclui `Objects.equals(...)` (igualdade de entity, não segurança — falso-positivo do accountfy).
+  { classe: "timing-compare", intencao: /forj(ar|a|am)|se passar (por|como)|assinatura (fraca|falsa|burl)|d[áa] pra (passar|forjar|fingir|burlar)|seguran[çc]a (falou|disse|achou)|burlar|spoofar/i, padrao: "(signature|hmac|verifytoken|verify_token|digest)\\s*(==|!=)\\s*(?!null)|(?<!Objects)\\.equals\\([^)]*(signature|hmac|token|secret)" },
+  // wrong-equality: comparar VALOR com operador de IDENTIDADE. CONCEITO universal, ASSINATURA por linguagem (gateada).
+  // Java: `x == "lit"` compara referência (bug). Em Kotlin/Python `==` é valor (correto) → NÃO entram no pack.
+  { classe: "eq-java", langs: ["java"], intencao: /condi[çc][ãa]o.*(nunca|n[ãa]o).*(pega|bate|funciona|entra)|compara[çc][ãa]o.*(errad|n[ãa]o funciona)|nunca (entra|cai|é verdadeir)|string.*(compar|igual)/i, padrao: "[\\w)\\]]\\s*(==|!=)\\s*\"" },
+  // Python: `x is "lit"`/`x is 5` usa identidade pra valor (bug; funciona por acaso via interning).
+  { classe: "eq-python", langs: ["py"], intencao: /condi[çc][ãa]o.*(nunca|n[ãa]o).*(pega|bate|funciona|entra)|compara[çc][ãa]o.*(errad|n[ãa]o funciona)|nunca (entra|cai|é verdadeir)/i, padrao: "\\bis\\s+[\"'\\d]" },
+  // cors-wildcard: origem `*` em allowlist de segurança (CSWSH/CSRF). Assinatura quase universal → sem gate.
+  { classe: "cors-wildcard", intencao: /qualquer (site|origem|lugar|um de fora)|cross.?site|\bcors\b|de qualquer (origem|lugar)|origem.*liberad|hijack/i, padrao: "(allowedorigins?|allow-origin|cross.?origin|setallowedorigin)[^\\n]{0,25}[\"']\\*[\"']" },
   { classe: "lock", intencao: /duas vezes|duplicad?|repetid|mesma (mensagem|coisa).*(vez|duas)|v[áa]rios servidor|ao mesmo tempo|concorr/i, padrao: "setIfAbsent|setnx|\\bMutex\\b|\\block\\b|synchronized|setExpiration" },
   { classe: "lost-msg", intencao: /some(m|u)?|sumi|evapor|n[ãa]o (chega|recebe|recebeu)|perde(u|ndo)|nunca tenta de novo/i, padrao: "deletionPolicy|ALWAYS|catch\\s*\\(|\\back\\b|acknowledge|sys\\.exit" },
   { classe: "stuck-ttl", intencao: /trava.*(sempre|pra sempre)|nunca volta|bloquead.*sempre|n[ãa]o volta nem reinic/i, padrao: "setIfAbsent|\\bexpire\\b|setTtl|setExpiration|EXPIRE" },
@@ -93,8 +112,9 @@ export async function localizarPorSmell(
   const bruto: { arquivo: string; classe: string }[] = []
   const vistos = new Set<string>()
   for (const s of smellsAtivos(sintoma)) {
-    // dedup por ARQUIVO (não por hit); pula TESTE (anti-padrão em teste ≠ bug de produção).
+    // dedup por ARQUIVO (não por hit); pula TESTE; gate por LINGUAGEM (padrão só vale na extensão certa).
     for (const h of await grep(raiz, indice, s.padrao, HITS_POR_GREP)) {
+      if (s.langs && !s.langs.includes(extDe(h.arquivo))) continue
       if (vistos.has(h.arquivo) || ehArquivoDeTeste(h.arquivo)) continue
       vistos.add(h.arquivo)
       bruto.push({ arquivo: h.arquivo, classe: s.classe })

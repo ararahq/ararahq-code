@@ -9,7 +9,14 @@ import type { Indice } from "../conhecimento"
 import { ler, grep, vizinhosArquivo, simbolosDe } from "./navegacao"
 import { detectouHedge } from "./diagnostico"
 
-const MAX_PASSOS = 10
+const MAX_PASSOS = Number(process.env.MAX_PASSOS ?? "6") // teto de passos; 6 medido melhor que 10 (menos timeout, +cravada)
+// Budget de tempo INTERNO do loop: para de adicionar passos quando estoura, e força a conclusão a partir
+// do que já investigou. Converte "timeout (perde tudo)" em "conclui do parcial" (CAUSA ou NÃO CRAVEI
+// honesto) ANTES do abort externo. É o que mata o timeout de verdade — teto de passos não cobre passo lento.
+const BUDGET_MS = Number(process.env.NAV_BUDGET_MS ?? "90000")
+// Deadline DURO (backstop): se o loop OU a conclusão forçada estourarem (passo lento), aborta e devolve
+// abstenção honesta do parcial — garante que o nav NUNCA bate o timeout externo (= zero "timeout perdido").
+const DEADLINE_MS = Number(process.env.NAV_DEADLINE_MS ?? "150000")
 const MAX_HITS_BUSCA = 12
 const MAX_VIZINHOS = 20
 const ORDEM_CONCLUIR =
@@ -88,34 +95,59 @@ export async function navegarDiagnostico(
 ): Promise<ResultadoNavegacao> {
   const lista = candidatos.length ? candidatos.map((c) => `- ${c}`).join("\n") : "(nenhum candidato pré-localizado; comece buscando)"
   const prompt = `SINTOMA (relato leigo do usuário):\n${input}\n\nARQUIVOS CANDIDATOS (ponto de partida, do localizador):\n${lista}\n\nInvestigue a causa-raiz navegando. Conclua com "CAUSA:" ou "NÃO CRAVEI:".`
-  const r = await generateText({
-    model,
-    system: SISTEMA,
-    prompt,
-    tools: ferramentas(raiz, indice),
-    stopWhen: stepCountIs(MAX_PASSOS),
-    temperature: 0,
-    abortSignal: signal,
+  const t0 = Date.now()
+  // Deadline duro: aborta nav+conclusão se estourar, combinado com o abort externo do chamador.
+  const acHard = new AbortController()
+  const timer = setTimeout(() => acHard.abort(), DEADLINE_MS)
+  const sinal = signal ? AbortSignal.any([signal, acHard.signal]) : acHard.signal
+  const abstencaoPorTempo = (): ResultadoNavegacao => ({
+    texto: `NÃO CRAVEI: estourei o tempo de investigação. Prováveis: ${candidatos.slice(0, 3).join(", ") || "—"}.`,
+    inTok: 0,
+    outTok: 0,
+    cravou: false,
+    passos: 0,
   })
+
+  let r
+  try {
+    r = await generateText({
+      model,
+      system: SISTEMA,
+      prompt,
+      tools: ferramentas(raiz, indice),
+      // Para por teto de passos OU por budget de tempo (entre passos) — o que vier primeiro.
+      stopWhen: [stepCountIs(MAX_PASSOS), () => Date.now() - t0 > BUDGET_MS],
+      temperature: 0,
+      abortSignal: sinal,
+    })
+  } catch (e) {
+    clearTimeout(timer)
+    if (acHard.signal.aborted) return abstencaoPorTempo() // deadline: abstém, não estoura o timeout externo
+    throw e
+  }
   let inTok = r.totalUsage?.inputTokens ?? r.usage?.inputTokens ?? 0
   let outTok = r.totalUsage?.outputTokens ?? r.usage?.outputTokens ?? 0
   let texto = r.text.trim()
 
-  // Se o modelo gastou todos os passos em tool-calls e bateu no teto SEM concluir (texto vazio), força
-  // uma última passada SEM ferramentas pra ele commitar a conclusão a partir do que já investigou.
+  // Se gastou os passos em tool-calls sem concluir (texto vazio), força a conclusão do que investigou —
+  // sob o MESMO deadline (se a conclusão estourar, fica vazio → abstém, sem travar).
   if (!texto && r.response?.messages?.length) {
-    const f = await generateText({
-      model,
-      system: SISTEMA,
-      messages: [...r.response.messages, { role: "user", content: ORDEM_CONCLUIR }],
-      temperature: 0,
-      abortSignal: signal,
-    })
-    texto = f.text.trim()
-    inTok += f.totalUsage?.inputTokens ?? f.usage?.inputTokens ?? 0
-    outTok += f.totalUsage?.outputTokens ?? f.usage?.outputTokens ?? 0
+    try {
+      const f = await generateText({
+        model,
+        system: SISTEMA,
+        messages: [...r.response.messages, { role: "user", content: ORDEM_CONCLUIR }],
+        temperature: 0,
+        abortSignal: sinal,
+      })
+      texto = f.text.trim()
+      inTok += f.totalUsage?.inputTokens ?? f.usage?.inputTokens ?? 0
+      outTok += f.totalUsage?.outputTokens ?? f.usage?.outputTokens ?? 0
+    } catch (e) {
+      if (!acHard.signal.aborted) throw e // erro real propaga; deadline → segue com texto vazio (abstém)
+    }
   }
-
+  clearTimeout(timer)
   return { texto, inTok, outTok, cravou: ehCravado(texto), passos: r.steps?.length ?? 0 }
 }
 

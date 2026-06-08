@@ -23,6 +23,29 @@ export type Skill = {
   termos: Set<string>
 }
 
+// Ponte de língua PT→EN (i18n GERAL — recurso linguístico como STOPWORDS, não tabela de domínio nem de
+// código): as skills do ecossistema são escritas em inglês, mas o usuário digita PT. Expande os termos da
+// TAREFA com o equivalente EN, pro casamento determinístico cruzar a língua. ZERO modelo (mantém a ativação
+// rápida). Cognatos técnicos/negócio comuns — nada específico de skill ou tarefa.
+const PONTE_PT_EN: Record<string, string[]> = {
+  segurança: ["security"], senha: ["password"], autenticação: ["authentication", "auth"], autorização: ["authorization"],
+  criptografia: ["encryption", "crypto"], vulnerabilidade: ["vulnerability"], auditoria: ["audit"], ameaça: ["threat"],
+  pagamento: ["payment", "billing"], pagamentos: ["payments", "billing"], fatura: ["invoice", "billing"], cobrança: ["billing", "charge"],
+  assinatura: ["subscription", "signature"], preço: ["price", "pricing"], preços: ["pricing"], vendas: ["sales"],
+  banco: ["database"], dados: ["data"], consulta: ["query"], fila: ["queue"], mensagem: ["message"], mensagens: ["messages"],
+  usuário: ["user"], usuários: ["users"], desempenho: ["performance"], implantação: ["deployment", "deploy"], implantar: ["deploy"],
+  teste: ["test", "testing"], testes: ["testing", "tests"], documentação: ["documentation", "docs"], requisitos: ["requirements"],
+  gráfico: ["chart", "graph"], relatório: ["report"], planilha: ["spreadsheet"], anúncio: ["ad", "advertising"], anúncios: ["ads"],
+  conteúdo: ["content"], crescimento: ["growth"], marca: ["brand"], componente: ["component"], integração: ["integration"],
+}
+
+/** Expande o mapa de termos com os equivalentes EN da ponte (soma, não destrói os PT). Puro, testável. */
+export function expandirTermosLingua(termos: Map<string, number>): Map<string, number> {
+  const out = new Map(termos)
+  for (const t of termos.keys()) for (const en of PONTE_PT_EN[t] ?? []) out.set(en, (out.get(en) ?? 0) + 1)
+  return out
+}
+
 // Casou >= MIN_SCORE termos distintos com a tarefa pra ativar (evita falso positivo de termo solto).
 const MIN_SCORE = 2
 // Quantas skills no máximo entram num prompt (protege o orçamento de tokens — não despeja a pasta toda).
@@ -157,7 +180,7 @@ function pontuar(termosTarefa: Map<string, number>, skill: Skill): number {
 export async function selecionarSkills(input: string, raiz: string): Promise<Skill[]> {
   const skills = await descobrirSkills(raiz)
   if (!skills.length) return []
-  const termos = perfilTermos(input)
+  const termos = expandirTermosLingua(perfilTermos(input)) // ponte PT→EN: skills são em inglês
   return skills
     .map((s) => ({ s, score: pontuar(termos, s) }))
     .filter((x) => x.score >= MIN_SCORE)

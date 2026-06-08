@@ -2,7 +2,23 @@ import { test, expect, describe, afterEach } from "bun:test"
 import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { descobrirSkills, selecionarSkills, montarBlocoSkills, resetSkills } from "./skills"
+import { descobrirSkills, selecionarSkills, montarBlocoSkills, resetSkills, expandirTermosLingua } from "./skills"
+import { perfilTermos } from "../engine/marques"
+
+describe("skills — ponte de língua PT→EN", () => {
+  test("expande termo PT com o equivalente EN, sem perder o PT", () => {
+    const exp = expandirTermosLingua(perfilTermos("auditoria de segurança e autenticação"))
+    expect(exp.has("segurança")).toBe(true) // mantém PT
+    expect(exp.has("security")).toBe(true) // adiciona EN
+    expect(exp.has("audit")).toBe(true)
+    expect(exp.has("authentication")).toBe(true)
+  })
+
+  test("termo sem entrada na ponte fica intacto (não inventa)", () => {
+    const exp = expandirTermosLingua(perfilTermos("xyzzy plumbus"))
+    expect([...exp.keys()].sort()).toEqual(["plumbus", "xyzzy"])
+  })
+})
 
 const homeOriginal = process.env.HOME
 const dirsOriginal = process.env.ARARA_SKILLS_DIRS

@@ -559,12 +559,13 @@ async function diagnosticarNavegando(
     let custo = custoDe(slug, inTok, outTok)
     const modelosUsados = [slug]
 
-    // Escalonamento SELETIVO (verificador sintoma→causa): se o BARATO cravou, o FORTE faz UMA verificação
-    // — lê só a janela do ponto e julga, cético, se aquele código produz ESTE sintoma. Pega o
-    // "grounded-but-wrong" (bug real, arquivo plausível, mas não o do ticket), que confiança não pega.
-    // Não confirmou → rebaixa pra abstenção honesta. O caro entra só no passo decisivo, não no repo cego.
+    // Verificador sintoma→causa (forte lê a janela e julga se a causa produz o sintoma). OPT-IN
+    // (`COM_VERIFICADOR=1`): medido NET-NEGATIVO no default — a chamada extra do forte taxa latência
+    // (→ timeout, que perde a cravada) e o verificador ainda false-confirma (não reduz confiante-errado).
+    // Desligá-lo dobrou cravou-certo (12%→31%) e cortou timeout (50%→25%). Fica pronto pra quando for
+    // mais rápido/seletivo. Ver corpus / verificador.ts.
     const alvo = cravou ? extrairCausaAlvo(texto) : null
-    if (alvo) {
+    if (alvo && process.env.COM_VERIFICADOR === "1") {
       const slugForte = cadeia[2] ?? cadeia[cadeia.length - 1]
       const v = await verificarCausa(input, process.cwd(), alvo.arquivo, alvo.linha, criarModel(slugForte), signal)
       inTok += v.inTok

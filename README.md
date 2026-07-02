@@ -232,7 +232,7 @@ A tese "medir, não sentir" é central. Roteamento e seleção de contexto se me
 - **Toda mudança de versão é commitada e enviada pra `main`.**
 - Commits: uma linha, `tipo(escopo): descrição`, presente do indicativo, sem body.
 
-Versão atual: **0.1.36**.
+Versão atual: **0.1.37**.
 
 ---
 

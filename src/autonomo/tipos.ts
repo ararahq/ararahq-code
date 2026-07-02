@@ -22,6 +22,9 @@ export type TarefaNormalizada = {
   instrucao: string
   autor: string
   resposta: RefResposta
+  // Imagem anexada (ex.: screenshot do bug). WhatsApp manda o media id — o gateway baixa via Media API
+  // (tem o token) e resolve pra bytes ANTES de despachar; o sandbox nunca vê o token da plataforma.
+  imagemMediaId?: string
 }
 
 // verde: editou e o build/teste do subprojeto fechou. sem-gate: editou mas não havia gate

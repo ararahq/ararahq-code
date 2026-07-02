@@ -15,18 +15,34 @@ carregarConfigGlobal()
 // Modo autônomo (Devin-mode): `jade-code --tarefa "<instrução>"` roda UMA tarefa sem REPL e imprime
 // o relatório JSON no stdout. É a porta usada pelo sandbox; nada interativo acontece neste caminho.
 // exit 0 = concluiu (verde/sem-gate/sem-mudanca) · exit 1 = vermelho/erro.
-const iTarefa = process.argv.indexOf("--tarefa")
+// Aceita imagem também: `--imagem <path>` (repetível) em qualquer posição. Screenshot de bug, print
+// de erro, mockup — entram no contexto do modelo junto do texto da tarefa.
+const argsCli = process.argv.slice(2)
+const caminhosImagem: string[] = []
+const restoArgs: string[] = []
+for (let i = 0; i < argsCli.length; i++) {
+  if (argsCli[i] === "--imagem" && i + 1 < argsCli.length) {
+    caminhosImagem.push(argsCli[++i])
+    continue
+  }
+  restoArgs.push(argsCli[i])
+}
+const iTarefa = restoArgs.indexOf("--tarefa")
 if (iTarefa >= 0) {
-  const instrucao = process.argv
-    .slice(iTarefa + 1)
-    .join(" ")
-    .trim()
+  const instrucao = restoArgs.slice(iTarefa + 1).join(" ").trim()
   if (!instrucao) {
-    console.error('uso: jade-code --tarefa "<instrução>"')
+    console.error('uso: jade-code --tarefa "<instrução>" [--imagem <arquivo>]')
     process.exit(2)
   }
+  const { carregarImagem } = await import("./agent/imagem")
+  const imagens = []
+  for (const caminho of caminhosImagem) {
+    const img = await carregarImagem(caminho)
+    if (img) imagens.push(img)
+    else console.error(`[Jade] imagem ignorada (não existe ou formato não suportado): ${caminho}`)
+  }
   const { executarTarefa } = await import("./autonomo/executor")
-  const rel = await executarTarefa(instrucao)
+  const rel = await executarTarefa(instrucao, imagens)
   console.log(JSON.stringify(rel))
   process.exit(rel.estado === "erro" || rel.estado === "vermelho" ? 1 : 0)
 }

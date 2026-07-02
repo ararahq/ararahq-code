@@ -56,7 +56,32 @@ describe("extrairWhatsApp", () => {
     expect(extrairWhatsApp(null)).toEqual([])
     expect(extrairWhatsApp({})).toEqual([])
     expect(extrairWhatsApp({ entry: [{ changes: [{ value: { messages: [{ type: "text" }] } }] }] })).toEqual([])
-    expect(extrairWhatsApp({ entry: [{ changes: [{ value: { messages: [{ type: "image", id: "x", from: "y" }] } }] }] })).toEqual([])
+    // imagem SEM legenda é ignorada (a Jade não adivinha o que fazer com a imagem)
+    expect(
+      extrairWhatsApp({ entry: [{ changes: [{ value: { messages: [{ type: "image", id: "x", from: "y", image: { id: "m1" } }] } }] }] }),
+    ).toEqual([])
+  })
+
+  test("imagem COM legenda vira tarefa; legenda é a instrução, media id capturado", () => {
+    const [t] = extrairWhatsApp({
+      entry: [
+        {
+          changes: [
+            {
+              value: {
+                messages: [
+                  { type: "image", id: "wamid.9", from: "5511988887777", image: { id: "media-42", caption: "ararahq/lp: o x não fecha o modal" } },
+                ],
+              },
+            },
+          ],
+        },
+      ],
+    })
+    expect(t.dedupeKey).toBe("wa:wamid.9")
+    expect(t.repo).toBe("ararahq/lp")
+    expect(t.instrucao).toBe("o x não fecha o modal")
+    expect(t.imagemMediaId).toBe("media-42")
   })
 })
 

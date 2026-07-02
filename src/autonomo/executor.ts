@@ -2,6 +2,7 @@ import { processar, desfechoUltimaTarefa, type Desfecho } from "../agent/agent"
 import { arquivosEditados } from "../agent/camada4"
 import { rodar } from "../tools"
 import { ativarHeadless } from "../terminal/ui"
+import type { ParteImagem } from "../agent/imagem"
 import type { EstadoExecucao, RelatorioExecucao } from "./tipos"
 
 // Executor autônomo — a Fase 1 do Devin-mode. Envelopa a máquina já provada (processar(): roteamento,
@@ -32,11 +33,11 @@ function msgErro(e: unknown): string {
  * Roda UMA tarefa de ponta a ponta, sem TTY, e devolve o relatório honesto: estado do portão de
  * build, resposta final do agente, arquivos editados e o diff. Nunca lança — erro vira estado "erro".
  */
-export async function executarTarefa(instrucao: string): Promise<RelatorioExecucao> {
+export async function executarTarefa(instrucao: string, imagens: ParteImagem[] = []): Promise<RelatorioExecucao> {
   ativarHeadless()
   const inicio = Date.now()
   try {
-    await processar(instrucao)
+    await processar(instrucao, imagens)
   } catch (e) {
     return {
       estado: "erro",

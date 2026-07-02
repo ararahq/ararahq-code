@@ -18,6 +18,7 @@ import { pareceMultiPasso, planejar, ferramentasDaFase, type Passo } from "./pla
 import { diagnosticarComFallback, reunirMaterial, gerarCandidatosDiagnostico } from "./diagnostico"
 import { pareceConsertarBuild, aterrarPorBuild } from "./grounding"
 import { registrarBaseline, baselineAtual, compararComBaseline, rotuloFalha } from "./baseline"
+import { anexarImagens, type ParteImagem } from "./imagem"
 import { selecionarPorVerificacao } from "./testtime"
 import { montarMapaAmplo, superficieDeArquivos } from "./contexto"
 import { criarResumirFn } from "../context/resumir"
@@ -147,6 +148,10 @@ function montarSistema(memoria: string, plano: string, contexto: string, skills 
 
 const historico: Msg[] = []
 
+// Imagens da tarefa atual (multimodal). Setadas no início de processar(), anexadas à última mensagem
+// de usuário em cada passada. Vazias entre tarefas (só texto). O histórico permanente guarda só texto.
+let _imagensTarefa: ParteImagem[] = []
+
 // Desfecho estruturado da última tarefa — o contrato do modo headless (executor autônomo lê isso
 // depois de processar() pra montar o relatório sem parsear texto). `gate` é o estado do portão de
 // build; null = a tarefa morreu em erro/abort antes de concluir.
@@ -210,7 +215,7 @@ async function executarPassada(cfg: ConfigPassada): Promise<ResultadoPassada> {
 
   const ac = new AbortController()
   _abort = ac
-  const mensagens = [...historico.slice(-LIMITE_HISTORICO), ...(extra ?? [])]
+  const mensagens = anexarImagens([...historico.slice(-LIMITE_HISTORICO), ...(extra ?? [])], _imagensTarefa)
   const result = streamText({
     model,
     system: sistema,
@@ -858,9 +863,10 @@ async function orquestrarComplexo(
   return true
 }
 
-export async function processar(input: string) {
+export async function processar(input: string, imagens: ParteImagem[] = []) {
   novaRodada()
   _desfecho = null
+  _imagensTarefa = imagens
   const ctx = await carregarContexto()
 
   // 3.7 — roteamento index-first: o índice da Camada 1 (se já existe) confirma referências de código

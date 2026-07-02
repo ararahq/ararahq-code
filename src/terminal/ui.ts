@@ -1,5 +1,4 @@
 import { renderMarkdown } from "./markdown"
-import { blindarFachada } from "../security/sanitize"
 
 // Paleta ancorada nos tokens da identidade Arara (ararahq-identidade.pen / globals.css).
 // brand-400 = teal vivo (primário), brand-500 = teal profundo (moldura/mascote). Não invente tom fora do ramp.
@@ -164,7 +163,7 @@ function contarLinhas(rendered: string): number {
   return n
 }
 function desenharStream() {
-  const rendered = renderMarkdown(blindarFachada(segBuffer))
+  const rendered = renderMarkdown(segBuffer)
   if (streamLinhas > 0) process.stdout.write(`\x1b[${streamLinhas}A\x1b[0J`)
   process.stdout.write(`${rendered}\n`)
   streamLinhas = contarLinhas(rendered)
@@ -223,7 +222,7 @@ export const ui = {
     return v === "s" || v === "sim" || v === "y"
   },
   passo: (m: string) => console.log(brand("⠿ ") + dim(m)),
-  // Fachada Jade: o usuário vê SÓ "Jade · <modo>". Nunca o modelo, o thinking, ou a marcha.
+  // Cabeçalho da tarefa: "Jade · <modo>". O modelo de cada tarefa fica no /custo e no ~/.arara/custo.json.
   // A inteligência (qual marcha rodou) é a propriedade intelectual — não vaza pra tela.
   jade: (modo: string) => console.log(`${brand("◆")} ${brand("Jade")} ${dim("· " + modo)}`),
   subItem: (m: string) => console.log(`  ${brand("→")} ${dim(m)}`),
@@ -231,7 +230,7 @@ export const ui = {
   linhaBranca: () => console.log(),
   spinnerStart: (label: string) => spinnerStartRaw(label),
   spinnerStop: () => spinnerStopRaw(),
-  resposta: (texto: string) => console.log(renderMarkdown(blindarFachada(texto))),
+  resposta: (texto: string) => console.log(renderMarkdown(texto)),
   streamAppend: (delta: string) => streamAppendRaw(delta),
   streamCommit: () => streamCommitRaw(),
   sucesso: (m: string) => console.log(`${brand("✓")} ${m}`),
@@ -266,7 +265,7 @@ export const ui = {
     rem.slice(0, 40).forEach((l) => console.log(err(`  - ${l}`)))
     add.slice(0, 40).forEach((l) => console.log(brand(`  + ${l}`)))
   },
-  // Fachada Jade: tokens/custo/tempo OK; modelo e "thinking" NÃO aparecem (são internos).
+  // Métricas da linha: tokens/custo/tempo. O modelo por tarefa está no /custo (escolha de UX, não segredo).
   metricas(tokens: number, custo: number, ms: number) {
     const tk = tokens >= 1000 ? `${(tokens / 1000).toFixed(1)}k` : `${tokens}`
     console.log(`${brand("✓")} ${dim(`pronto · ${tk} tokens · $${custo.toFixed(4)} · ${(ms / 1000).toFixed(1)}s`)}`)
@@ -283,7 +282,7 @@ export const ui = {
     console.log()
   },
   // Painel ADMIN interno (D10): revela a marcha e o MODELO REAL por tarefa. Só aqui, no /custo —
-  // nunca na resposta normal (essa é a fachada Jade). É o canal de auditoria de qual marcha rodou.
+  // É o canal de auditoria de qual marcha/modelo rodou cada tarefa.
   custoHistorico(linhas: { modo: string; modelo: string; tokens: number; custoUSD: number; ms: number }[]) {
     if (!linhas.length) return
     console.log(brand(bold("  Marchas (admin · modelo real)")))

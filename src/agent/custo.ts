@@ -14,7 +14,7 @@ export type RegistroTarefa = {
   ms: number
 }
 
-// Linha do histórico interno (admin): guarda o MODELO REAL (marcha) por tarefa. A fachada Jade
+// Linha do histórico de custo: guarda o MODELO usado (marcha) por tarefa. Os modelos são públicos
 // nunca mostra isso na resposta — é só pra /custo admin e auditoria de qual marcha rodou.
 export type LinhaHistorico = RegistroTarefa & { ts: string }
 type Persistido = { meses: Record<string, Agregado>; historico?: LinhaHistorico[] }
@@ -78,7 +78,7 @@ export async function custoMes(mes = mesAtual()): Promise<Agregado> {
   return dados.meses[mes] ?? vazio()
 }
 
-/** Histórico interno (admin): últimas N tarefas com o MODELO REAL por trás da fachada Jade. */
+/** Histórico de custo: últimas N tarefas com o modelo usado em cada uma. */
 export async function historicoTarefas(n = 10): Promise<LinhaHistorico[]> {
   const dados = await ler()
   return (dados.historico ?? []).slice(-n).reverse()

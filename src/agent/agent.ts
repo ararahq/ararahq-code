@@ -1224,7 +1224,7 @@ export async function processar(input: string, imagens: ParteImagem[] = []) {
 
   // Escalada por test-time compute (3.4): só quando a verificação ainda está vermelha E o tracker
   // marcou escalada pendente (3 erros de código no mesmo ponto). subirEsforco gradua: primeiro mais
-  // thinking no MESMO modelo (barato), só depois troca de marcha. Invisível pro usuário (fachada Jade).
+  // thinking no MESMO modelo (barato), só depois troca de marcha. Automático — o usuário não precisa pedir.
   let esforco: Esforco = { modelo: modeloAtual, thinking: thinkingExec }
   while (escaladaPendente() && !estourouTeto() && ultimaVerificouEFalhou(respostaFinal)) {
     const proximo = subirEsforco(esforco)
@@ -1331,7 +1331,7 @@ export async function processar(input: string, imagens: ParteImagem[] = []) {
   const custo = custoUSD(modeloAtual, totalIn, totalOut) + custoRaciocinio
   const tokens = totalIn + totalOut + tokensRaciocinio
   const houveThinking = thinkingExec || esforco.thinking || modoFinal === "diagnostico"
-  // Fachada Jade: a tela mostra só tokens/custo/tempo. O modelo REAL fica no log interno (custo.json).
+  // Métricas na tela: tokens/custo/tempo. O modelo usado fica por tarefa no ~/.arara/custo.json (/custo).
   ui.metricas(tokens, custo, Date.now() - inicio)
   const modeloInterno =
     modoFinal === "diagnostico"
@@ -1450,7 +1450,7 @@ async function processarConversa(input: string, ctx: { resumo: string }, modeloC
  * Streamer compartilhado das capacidades de LEITURA do copiloto (compreender/planejar/comunicar): o
  * `sistema` já vem com o contexto reunido (mapa + corpos / diff). UMA passada, SEM ferramentas — nunca
  * edita nem executa, e não entra em loop de exploração (que fazia o modelo gastar o orçamento lendo e
- * terminar sem responder). Honra abort, stream, custo e fachada Jade. O chamador já mostrou ui.jade.
+ * terminar sem responder). Honra abort, stream e custo. O chamador já mostrou ui.jade.
  */
 async function streamLeitura(
   input: string,
@@ -1604,7 +1604,7 @@ function finalizarAbort() {
   historico.pop()
 }
 
-/** Rótulo da marcha pra fachada Jade: o usuário vê só o MODO, nunca o modelo nem a marcha N. */
+/** Rótulo do cabeçalho da tarefa: o MODO em pt-BR (o modelo por tarefa fica no /custo). */
 function rotuloModo(modo: string): string {
   if (modo === "diagnostico") return "diagnóstico"
   if (modo === "conversa") return "conversa"
@@ -1615,9 +1615,8 @@ function rotuloModo(modo: string): string {
 }
 
 /**
- * Log INTERNO (modelo real, marcha, escalada). NUNCA vai pro stdout — esse é a fachada Jade que o
- * usuário lê. Vai pra stderr só sob ARARA_DEBUG=1. A trilha definitiva do modelo real por tarefa
- * fica no custo.json (canal admin do /custo). Aqui é só o rastro de qual marcha rodou.
+ * Log de depuração (marcha, escalada, escopo). Não polui o stdout da resposta — vai pra stderr,
+ * só sob ARARA_DEBUG=1. A trilha do modelo por tarefa fica no custo.json (/custo).
  */
 function logInterno(msg: string): void {
   if (process.env.ARARA_DEBUG === "1") process.stderr.write(`[jade] ${msg}\n`)

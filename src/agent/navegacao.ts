@@ -245,7 +245,7 @@ export async function ranquearCandidatos(raiz: string, indice: Indice, termos: s
   if (!termos.length) return []
   const res = termos.map(reTermo)
   const casados = new Map<string, number[]>()
-  const df = new Array(termos.length).fill(0)
+  const df = Array.from({ length: termos.length }, () => 0)
 
   const arquivos = indice.simbolos.map((s) => s.arquivo)
   for (let ini = 0; ini < arquivos.length; ini += LOTE_LEITURA) {

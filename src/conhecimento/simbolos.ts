@@ -58,7 +58,7 @@ const JAVA: Spec = {
     { tipo: "interface", re: /^\s*(?:public|private|protected|abstract|final|static)*\s*interface\s+([A-Za-z_]\w*)/, grupo: 1 },
     { tipo: "enum", re: /^\s*(?:public|private|protected)*\s*enum\s+([A-Za-z_]\w*)/, grupo: 1 },
     { tipo: "classe", re: /^\s*(?:public|private|protected|abstract|final|static)*\s*class\s+([A-Za-z_]\w*)/, grupo: 1 },
-    { tipo: "metodo", re: /^\s*(?:public|private|protected|static|final|synchronized|abstract|default)+\s+(?:<[^>]*>\s*)?[\w<>\[\].,?\s]+?\s+([A-Za-z_]\w*)\s*\([^;]*$/, grupo: 1 },
+    { tipo: "metodo", re: /^\s*(?:public|private|protected|static|final|synchronized|abstract|default)+\s+(?:<[^>]*>\s*)?[\w<>[\].,?\s]+?\s+([A-Za-z_]\w*)\s*\([^;]*$/, grupo: 1 },
   ],
   imports: [/^\s*import\s+(?:static\s+)?([\w.]+(?:\.\*)?)/],
 }
@@ -167,8 +167,8 @@ const CSHARP: Spec = {
     { tipo: "classe", re: /^\s*(?:(?:public|private|protected|internal|static|sealed|abstract|partial)\s+)*(?:class|record(?:\s+class)?)\s+([A-Za-z_]\w*)/, grupo: 1 },
     { tipo: "struct", re: /^\s*(?:(?:public|private|protected|internal|readonly|partial)\s+)*(?:record\s+)?struct\s+([A-Za-z_]\w*)/, grupo: 1 },
 
-    { tipo: "metodo", re: /^\s*(?:(?:public|private|protected|internal|static|virtual|override|sealed|async|partial|new|extern|unsafe)\s+)+[\w<>\[\],.?\s]+?\s+([A-Za-z_]\w*)\s*\([^;]*$/, grupo: 1 },
-    { tipo: "constante", re: /^\s*(?:(?:public|private|protected|internal)\s+)*const\s+[\w<>\[\]?.]+\s+([A-Za-z_]\w*)/, grupo: 1 },
+    { tipo: "metodo", re: /^\s*(?:(?:public|private|protected|internal|static|virtual|override|sealed|async|partial|new|extern|unsafe)\s+)+[\w<>[\],.?\s]+?\s+([A-Za-z_]\w*)\s*\([^;]*$/, grupo: 1 },
+    { tipo: "constante", re: /^\s*(?:(?:public|private|protected|internal)\s+)*const\s+[\w<>[\]?.]+\s+([A-Za-z_]\w*)/, grupo: 1 },
   ],
 
   imports: [/^\s*using\s+(?:static\s+)?([\w.]+)\s*;/],

@@ -1,5 +1,5 @@
 import { generateText } from "ai"
-import { provedor } from "../llm/openrouter"
+import { provedorLLM } from "../llm/provedor"
 
 export type Fase = "ler" | "editar" | "verificar" | "geral"
 export type Passo = { texto: string; fase: Fase }
@@ -87,7 +87,7 @@ function parsePlano(texto: string): Passo[] {
 
 export async function planejar(input: string): Promise<Passo[]> {
   try {
-    const openrouter = provedor()
+    const openrouter = provedorLLM()
     const { text } = await generateText({
       model: openrouter(MODELO_PLANO),
       system: SISTEMA_PLANO,

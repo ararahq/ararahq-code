@@ -1,7 +1,7 @@
 import { generateText } from "ai"
 import { mkdir, readdir } from "node:fs/promises"
 import { dirname } from "node:path"
-import { provedor } from "../llm/openrouter"
+import { provedorLLM } from "../llm/provedor"
 import { carregarContexto, resetContexto, caminhoCache, temSintese } from "./projeto"
 import { ui } from "../terminal/ui"
 
@@ -36,7 +36,7 @@ async function evidencias(raiz: string): Promise<string> {
 
 async function sintetizar(raiz: string): Promise<string> {
   const ev = await evidencias(raiz)
-  const openrouter = provedor()
+  const openrouter = provedorLLM()
   const { text } = await generateText({
     model: openrouter(MODELO),
     system: SISTEMA,

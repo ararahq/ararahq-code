@@ -1,6 +1,6 @@
 import { streamText, stepCountIs, tool } from "ai"
 import { z } from "zod"
-import { provedor } from "../llm/openrouter"
+import { provedorLLM, type ProvedorLLM } from "../llm/provedor"
 import { modeloOllama, provedorOllama } from "../llm/ollama"
 import {
   rotear,
@@ -525,7 +525,7 @@ type ResultadoTTC = { ok: boolean; texto: string; tokens: number; custoUSD: numb
 
 async function tentarTestTimeCompute(
   input: string,
-  openrouter: ReturnType<typeof provedor>,
+  openrouter: ProvedorLLM,
   ctx: { completo: string },
   skills = "",
 ): Promise<ResultadoTTC> {
@@ -610,7 +610,7 @@ async function lerTrecho(arquivo: string, linha: number): Promise<string | null>
 
 async function consertarBuildAterrado(
   input: string,
-  openrouter: ReturnType<typeof provedor>,
+  openrouter: ProvedorLLM,
   ctx: { completo: string },
   skills = "",
 ): Promise<boolean> {
@@ -733,7 +733,7 @@ async function consertarBuildAterrado(
 
 async function orquestrarComplexo(
   input: string,
-  openrouter: ReturnType<typeof provedor>,
+  openrouter: ProvedorLLM,
   ctx: { completo: string; resumo: string },
   skills = "",
 ): Promise<boolean> {
@@ -856,7 +856,7 @@ type PrepDiagnostico =
 
 async function faseDiagnostico(
   input: string,
-  openrouter: ReturnType<typeof provedor>,
+  openrouter: ProvedorLLM,
   ctx: { completo: string },
   blocoSkills: string,
 ): Promise<PrepDiagnostico> {
@@ -1066,7 +1066,7 @@ export async function processar(input: string, imagens: ParteImagem[] = []) {
 
   let openrouter
   try {
-    openrouter = provedor()
+    openrouter = provedorLLM()
   } catch (e) {
     ui.jade(rotuloModo(modo))
     ui.erro((e as Error).message)
@@ -1298,7 +1298,7 @@ async function processarConversa(input: string, ctx: { resumo: string }, modeloC
   }
   if (!model) {
     try {
-      model = provedor()(modeloCloud) as Modelo
+      model = provedorLLM()(modeloCloud) as Modelo
     } catch (e) {
       ui.jade("conversa")
       ui.erro((e as Error).message)
@@ -1369,9 +1369,9 @@ async function streamLeitura(
   sistema: string,
   thinking: boolean,
 ): Promise<void> {
-  let openrouter: ReturnType<typeof provedor>
+  let openrouter: ProvedorLLM
   try {
-    openrouter = provedor()
+    openrouter = provedorLLM()
   } catch (e) {
     ui.spinnerStop()
     ui.erro((e as Error).message)

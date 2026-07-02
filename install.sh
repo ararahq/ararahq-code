@@ -29,11 +29,18 @@ fi
 diga "instalando jade-code…"
 bun add -g "$REPO"
 
-# 3. Próximos passos, honestos: bring your own key.
+# 3. Garante ~/.bun/bin no PATH — bun instalado via Homebrew não adiciona (os globais ficam órfãos).
 BIN_DIR="$(dirname "$(command -v jade-code 2>/dev/null || echo "$HOME/.bun/bin/jade-code")")"
 diga "pronto! instalado em ${BIN_DIR}/jade-code"
 if ! command -v jade-code >/dev/null 2>&1; then
-  diga "adicione ao PATH (e reabra o shell): export PATH=\"\$HOME/.bun/bin:\$PATH\""
+  RC="$HOME/.zshrc"
+  case "${SHELL:-}" in */bash) RC="$HOME/.bashrc" ;; esac
+  if ! grep -q 'BUN_INSTALL' "$RC" 2>/dev/null; then
+    printf '\nexport BUN_INSTALL="$HOME/.bun"\nexport PATH="$BUN_INSTALL/bin:$PATH"\n' >> "$RC"
+    diga "adicionei ~/.bun/bin ao PATH em ${RC} — abra um shell novo (ou: source ${RC})"
+  else
+    diga "abra um shell novo pra carregar o PATH (ou: source ${RC})"
+  fi
 fi
 diga 'próximo passo: cd no seu projeto e rode `jade-code`.'
 diga "na primeira vez ele pede sua OPENROUTER_API_KEY (https://openrouter.ai/keys) e salva em ~/.arara/.env — a chave é sua, fica na sua máquina."

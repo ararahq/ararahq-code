@@ -9,12 +9,17 @@ import { generateText } from "ai"
 import { ler } from "./navegacao"
 
 const JANELA = 40 // linhas ao redor da linha afirmada (anti-afogamento; o forte lê só o ponto)
+const VERIF_BUDGET_MS = Number(process.env.VERIF_BUDGET_MS ?? "25000") // verify SEMPRE rápido: nunca causa timeout
 
-const SISTEMA = `Você é um verificador CÉTICO de causa-raiz. Recebe um SINTOMA (relato leigo de bug) e um TRECHO de código que alguém afirmou ser a causa. Sua ÚNICA tarefa: esse código produz ESSE sintoma?
+const SISTEMA = `Você é um verificador CÉTICO de causa-raiz. Recebe um SINTOMA (relato leigo) e um TRECHO de código afirmado como a causa. Tarefa ÚNICA: esse código produz EXATAMENTE este sintoma?
+MÉTODO obrigatório (faça antes de decidir):
+1. Diga o que o sintoma EXIGE do código — que comportamento concreto geraria esse relato.
+2. TRACE o caminho dentro do trecho: do gatilho até o efeito que o usuário descreve, passo a passo.
+3. Não conseguiu traçar um mecanismo DIRETO e concreto até ESTE sintoma? Então é NAO.
 REGRAS:
-- 1ª linha: só "SIM" ou "NAO".
-- 2ª linha: uma frase com o MECANISMO concreto que liga o código ao sintoma (ou por que não liga).
-- Seja cético. Achar "um bug" no código NÃO basta — tem que ser a causa DESTE sintoma específico. Se a ligação não for clara e mecânica, responda NAO. Na dúvida, NAO.`
+- 1ª linha: só "SIM" ou "NAO". Depois, o trace em 1-2 frases.
+- "Achar um bug" NÃO basta: o trecho pode ter um bug REAL que não é a causa DESTE sintoma → NAO.
+- Default é NAO. Só SIM se você traçou o mecanismo e apostaria nele. Qualquer elo faltando ou assumido → NAO.`
 
 // "CAUSA: arquivo:linha" → {arquivo, linha}. Exige :linha (o verificador precisa do ponto pra ler a
 // janela). Tolera preâmbulo/bold (igual ehCravado). null se não há linha CAUSA com arquivo:linha.
@@ -58,13 +63,25 @@ export async function verificarCausa(
   signal?: AbortSignal,
 ): Promise<Verificacao> {
   const codigo = await trechoAfirmado(raiz, arquivo, linha)
-  const prompt = `SINTOMA:\n${sintoma}\n\nCAUSA AFIRMADA: ${arquivo}:${linha}\nCÓDIGO (janela):\n${codigo}\n\nEsse código produz ESSE sintoma? Responda "SIM" ou "NAO" na 1ª linha + 1 frase do mecanismo.`
-  const r = await generateText({ model, system: SISTEMA, prompt, temperature: 0, abortSignal: signal })
-  const motivo = r.text.trim()
-  return {
-    confirma: interpretarVeredito(motivo),
-    motivo,
-    inTok: r.totalUsage?.inputTokens ?? r.usage?.inputTokens ?? 0,
-    outTok: r.totalUsage?.outputTokens ?? r.usage?.outputTokens ?? 0,
+  const prompt = `SINTOMA:\n${sintoma}\n\nCAUSA AFIRMADA: ${arquivo}:${linha}\nCÓDIGO (janela):\n${codigo}\n\nSiga o MÉTODO: (1) o que o sintoma exige, (2) trace o caminho, (3) decida. 1ª linha SIM/NAO.`
+  // Budget interno: verify SEMPRE rápido (nunca causa timeout). Estourou → mantém a cravada (não pune
+  // resposta possivelmente certa por verify lento); só rebaixa quando o verificador ATIVAMENTE diz NAO.
+  const ac = new AbortController()
+  const timer = setTimeout(() => ac.abort(), VERIF_BUDGET_MS)
+  const sinal = signal ? AbortSignal.any([signal, ac.signal]) : ac.signal
+  try {
+    const r = await generateText({ model, system: SISTEMA, prompt, temperature: 0, abortSignal: sinal })
+    clearTimeout(timer)
+    const motivo = r.text.trim()
+    return {
+      confirma: interpretarVeredito(motivo),
+      motivo,
+      inTok: r.totalUsage?.inputTokens ?? r.usage?.inputTokens ?? 0,
+      outTok: r.totalUsage?.outputTokens ?? r.usage?.outputTokens ?? 0,
+    }
+  } catch (e) {
+    clearTimeout(timer)
+    if (ac.signal.aborted) return { confirma: true, motivo: "verify estourou o tempo — mantém a cravada", inTok: 0, outTok: 0 }
+    throw e
   }
 }

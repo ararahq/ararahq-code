@@ -41,7 +41,7 @@ function nomeCasaEntidade(nome: string, entidades: string[]): boolean {
 
 /**
  * Símbolos-semente: definições cujo NOME casa um termo do sintoma (via índice, não grep). Pega
- * assignSharedNumber/isSharedNumber/findByDedicated... O nome que não cita a entidade (resolveSender)
+ * creditLedger/isSettled/findByStatus... O nome que não cita a entidade (processStatusUpdate)
  * entra depois, pela expansão do grafo no mesmo arquivo.
  */
 function resolverSementes(indice: Indice, entidades: string[]): Simbolo[] {
@@ -81,8 +81,8 @@ const RE_OP_REPO = /^findFirst|^findAll|^findBy|^find[A-Z]|save|delete|update/
 /**
  * Rankeia os arquivos das sementes por relevância de DOMÍNIO (não por ordem de varredura). O sinal
  * forte vem do grafo: arquivo de serviço cuja semente já chama uma operação de repositório é onde a
- * divergência mora (resolveSender/assignSharedNumber). Num monorepo, contagem de nome sozinha enterra
- * o serviço backend sob telas de UI que citam "shared" — por isso o peso pesado vai pra ops+service.
+ * divergência mora (processStatusUpdate/creditLedger). Num monorepo, contagem de nome sozinha enterra
+ * o serviço backend sob telas de UI que citam "ledger" — por isso o peso pesado vai pra ops+service.
  */
 export type ModoFoco = "cirurgico" | "amplo"
 
@@ -650,7 +650,7 @@ async function superficieEscopada(
 }
 
 /**
- * Símbolos do mapa: os métodos que entraram nos pares (cobre resolveSender, que o nome não cita) +
+ * Símbolos do mapa: os métodos que entraram nos pares (cobre processStatusUpdate, que o nome não cita) +
  * as sementes dos ARQUIVOS-FOCO. Sementes de UI/gen fora do foco não entram — o mapa orienta o
  * modelo pro código de domínio, não pra telas que só citam a entidade.
  */

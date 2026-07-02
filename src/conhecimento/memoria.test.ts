@@ -7,13 +7,13 @@ import { montarRegistroBug, registrarBug, buscarPrecedente } from "./memoria"
 describe("1.5 — montarRegistroBug", () => {
   test("extrai arquivo:linha do diagnóstico e correção dos editados", () => {
     const r = montarRegistroBug(
-      "o número compartilhado salva errado",
+      "o estorno do cliente salva errado",
       "Causa raiz: o getter usa isShared em PoolService.kt:42 sem checar nulo.",
       ["src/PoolService.kt"],
     )
     expect(r.arquivoLinha).toBe("PoolService.kt:42")
     expect(r.correcao).toBe("editado: src/PoolService.kt")
-    expect(r.sintoma).toBe("o número compartilhado salva errado")
+    expect(r.sintoma).toBe("o estorno do cliente salva errado")
   })
 
   test("sem arquivo:linha no texto, cai no primeiro arquivo editado", () => {
@@ -49,15 +49,15 @@ describe("1.5 — write-path round-trip (registrarBug -> buscarPrecedente)", () 
     process.env.HOME = tmp
     const raiz = "/proj/exemplo"
 
-    expect(await buscarPrecedente(raiz, "número compartilhado salva errado")).toEqual([])
+    expect(await buscarPrecedente(raiz, "estorno do cliente salva errado")).toEqual([])
 
     await registrarBug(raiz, montarRegistroBug(
-      "o número compartilhado salva errado",
+      "o estorno do cliente salva errado",
       "Causa: getter retorna o dedicated em PoolService.kt:42",
       ["src/PoolService.kt"],
     ))
 
-    const prec = await buscarPrecedente(raiz, "por que o número compartilhado salva errado")
+    const prec = await buscarPrecedente(raiz, "por que o estorno do cliente salva errado")
     expect(prec.length).toBeGreaterThan(0)
     expect(prec[0].tipo).toBe("bug")
     expect(prec[0].item).toHaveProperty("arquivoLinha", "PoolService.kt:42")

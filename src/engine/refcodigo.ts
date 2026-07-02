@@ -21,7 +21,7 @@ const RE_ARQUIVO_FONTE = /[\w./-]*\w\.[A-Za-z][A-Za-z0-9]{1,9}\b/
 const RE_ARQUIVO_FONTE_G = /[\w./-]*\w\.[A-Za-z][A-Za-z0-9]{1,9}\b/g
 // Caminho com `/`: pelo menos um segmento separado por barra (src/agent/foo, app/page).
 const RE_CAMINHO = /\b[\w-]+\/[\w./-]+/
-// Identificador de código: camelCase (isShared) ou PascalCase com 2+ palavras (AraraPhoneNumberService).
+// Identificador de código: camelCase (isShared) ou PascalCase com 2+ palavras (LedgerService).
 // Palavra única capitalizada (Java, Python, String) NÃO casa — é prosa/tipo solto, não referência.
 const RE_IDENT = /\b[a-z][a-z0-9]*[A-Z]\w*|\b(?:[A-Z][a-z0-9]+){2,}\b/
 // Chamada de função colada no parêntese (`salvar(`); espaço antes do `(` é prosa ("depois (talvez)").

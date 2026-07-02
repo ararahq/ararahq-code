@@ -2,7 +2,7 @@ import { createOpenRouter } from "@openrouter/ai-sdk-provider"
 
 export class SemApiKey extends Error {
   constructor() {
-    super("Defina OPENROUTER_API_KEY para usar o Arara Code (https://openrouter.ai/keys).")
+    super("Defina OPENROUTER_API_KEY para usar o Jade Code (https://openrouter.ai/keys).")
     this.name = "SemApiKey"
   }
 }

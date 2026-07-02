@@ -292,7 +292,7 @@ export type Candidato = { arquivo: string; score: number; estrutural: boolean; t
 
 /**
  * Localizador ranqueado (Tier 1 do gate de custo): dado termos de busca já em vocabulário de código,
- * pontua arquivos por relevância. Lever medido (Creditas, reach 2→7/8):
+ * pontua arquivos por relevância. Lever medido (repo real, reach 2→7/8):
  * - IDF: termo RARO (mutex, ssrf) pesa mais que comum (error, request) — separa sinal de ruído.
  * - match ESTRUTURAL (termo no nome do arquivo/símbolo) ×3 — é o sinal de CONFIANÇA do gate.
  * - salto de grafo: vizinho herda fração do score (alcança o ausente).

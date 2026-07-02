@@ -210,7 +210,7 @@ const MIN_TOKEN_ENTIDADE = 4
 /**
  * Um método toca a entidade se: o nome dele a cita, OU o corpo dele a cita (camelCase ou prosa),
  * OU o arquivo é claramente da entidade (nome do arquivo casa). Olhar o CORPO é o que pega
- * resolveSender/assignSharedNumber no teste-mãe: o nome não diz "shared", mas a query no corpo sim.
+ * processStatusUpdate/creditLedger no teste-mãe: o nome não diz "ledger", mas a query no corpo sim.
  */
 function metodoTocaEntidade(
   metodo: string,
@@ -223,7 +223,7 @@ function metodoTocaEntidade(
   return entidades.some((e) => e.length >= MIN_TOKEN_ENTIDADE && alvo.includes(e.toLowerCase()))
 }
 
-/** O nome do arquivo casa a entidade? (AraraPhoneNumberService casa "number"/"phone"). */
+/** O nome do arquivo casa a entidade? (LedgerService casa "ledger"/"balance"). */
 function arquivoCasaEntidade(arquivo: string, entidades: string[]): boolean {
   const base = (arquivo.split("/").pop() ?? "").toLowerCase()
   return entidades.some((e) => e.length >= MIN_TOKEN_ENTIDADE && base.includes(e.toLowerCase()))
@@ -295,7 +295,7 @@ const SUFIXO_MIN = 4
  * - mesma INTENÇÃO de query (alvos compartilham sufixo significativo, ex: ...IsActiveTrue): +4
  * - intra-arquivo (mesmo serviço): +2
  * - algum dos trechos cita um termo do sintoma (shared/dedicated...): +3
- * - algum dos nomes de método cita a entidade (assignSharedNumber): +2
+ * - algum dos nomes de método cita a entidade (creditLedger): +2
  * - arquivo casa a entidade pelo nome: +1
  */
 function pontuarPar(a: ChamadaCtx, b: ChamadaCtx, entidades: string[]): number {
@@ -527,7 +527,7 @@ async function traduzirParaTermos(
 /**
  * Diagnóstico por NAVEGAÇÃO pra material FRACO (sem par preciso): traduz o sintoma → localiza os
  * candidatos (locator barato) → o modelo NAVEGA o código (abre arquivo, segue call-site, lê o ponto
- * real) e commita "CAUSA:" ou abstém "NÃO CRAVEI:". Medido na Creditas: cravou 1→5/8, confiante-errado
+ * real) e commita "CAUSA:" ou abstém "NÃO CRAVEI:". Medido em repo real (benchmark interno): cravou 1→5/8, confiante-errado
  * 5→0/8 com modelo barato — navega até o call-site e pega bug de ausência que grep não acha. Escalar
  * pro forte foi medido NET-NEGATIVO (não cracka os duros, só custa), então roda 1 modelo barato.
  * Retorna null pra degradar pro fluxo normal (ex.: sem índice). Gateado pelo chamador em `pares===0`,
@@ -566,12 +566,13 @@ async function diagnosticarNavegando(
     // mais rápido/seletivo. Ver corpus / verificador.ts.
     const alvo = cravou ? extrairCausaAlvo(texto) : null
     if (alvo && process.env.COM_VERIFICADOR === "1") {
-      const slugForte = cadeia[2] ?? cadeia[cadeia.length - 1]
-      const v = await verificarCausa(input, process.cwd(), alvo.arquivo, alvo.linha, criarModel(slugForte), signal)
+      // verify com modelo BARATO por default (rápido+barato, sob budget → não causa timeout); VERIF_FORTE=1 usa o forte.
+      const slugVerif = process.env.VERIF_FORTE === "1" ? (cadeia[2] ?? cadeia[cadeia.length - 1]) : cadeia[0]
+      const v = await verificarCausa(input, process.cwd(), alvo.arquivo, alvo.linha, criarModel(slugVerif), signal)
       inTok += v.inTok
       outTok += v.outTok
-      custo += custoDe(slugForte, v.inTok, v.outTok)
-      modelosUsados.push(slugForte)
+      custo += custoDe(slugVerif, v.inTok, v.outTok)
+      modelosUsados.push(slugVerif)
       if (!v.confirma) {
         const provaveis = candidatos.slice(0, 3).join(", ") || "—"
         texto = `NÃO CRAVEI: o verificador não confirmou que ${alvo.arquivo}:${alvo.linha} causa o sintoma (${v.motivo.split("\n")[0]}). Prováveis: ${provaveis}.`

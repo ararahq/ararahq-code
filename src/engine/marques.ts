@@ -222,7 +222,7 @@ export function ehGenerico(termo: string): boolean {
 
 const RE_CAMEL = /([a-z])([A-Z])/g
 
-/** Quebra camelCase/PascalCase em palavras: isSharedNumber -> [is, shared, number]. */
+/** Quebra camelCase/PascalCase em palavras: isActiveUser -> [is, active, user]. */
 function quebrarCamel(token: string): string[] {
   return token.replace(RE_CAMEL, "$1 $2").split(/\s+/).filter(Boolean)
 }

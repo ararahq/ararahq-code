@@ -11,7 +11,7 @@ describe("smells — extDe (linguagem do arquivo, derivada da extensão)", () =>
   })
 })
 
-const FIX = (nome: string) => resolve(import.meta.dir, "../../eval/fixtures", nome)
+const FIX = (nome: string) => resolve(import.meta.dir, "../../test/fixtures", nome)
 
 describe("smells — smellsAtivos (intent match, o elo determinístico)", () => {
   test("'não terminaram essa parte' ativa stub", () => {
@@ -64,9 +64,9 @@ describe("smells — ehArquivoDeTeste (filtro de precisão grátis)", () => {
   })
 })
 
-describe("smells — localizarComSmell (smell + lexical ranqueado, fixture twilio-refund)", () => {
+describe("smells — localizarComSmell (smell + lexical ranqueado, fixture refund)", () => {
   test("sintoma de perda ativa lost-msg e surge arquivo do mecanismo (catch), marcado smell:", async () => {
-    const raiz = FIX("twilio-refund")
+    const raiz = FIX("refund")
     const indice = await indexar(raiz, { force: true })
     const cand = await localizarComSmell(raiz, indice, "a mensagem some e não chega pro cliente", ["mensagem"])
     const sm = cand.find((c) => c.termos.some((t) => t.startsWith("smell:")))
@@ -75,7 +75,7 @@ describe("smells — localizarComSmell (smell + lexical ranqueado, fixture twili
   })
 
   test("sintoma sem mecanismo conhecido → só fallback lexical (zero smell)", async () => {
-    const raiz = FIX("twilio-refund")
+    const raiz = FIX("refund")
     const indice = await indexar(raiz, { force: true })
     const cand = await localizarComSmell(raiz, indice, "está meio devagar de manhã hoje", ["refund"])
     expect(cand.every((c) => !c.termos.some((t) => t.startsWith("smell:")))).toBe(true)

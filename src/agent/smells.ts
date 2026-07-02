@@ -36,7 +36,7 @@ export const SMELLS: Smell[] = [
   { classe: "dedup", intencao: /pessoa errada|destinat[aá]ri|trocou (o|a)|foi pra (outr|quem)|mensagem.*(errad|trocad)/i, padrao: "distinctBy|associateBy|groupBy|\\.toMap\\(|dedup" },
   { classe: "error-class", intencao: /culpa.*client|sempre.*(erro|falh)|n[ãa]o.*(retent|tenta de novo)|trata.*erro.*errad/i, padrao: "statusCode|\\bit\\.code\\b|CLIENT_ERROR|SERVER_ERROR|getOrElse" },
   { classe: "fail-open-auth", intencao: /sem senha|senha em branco|qualquer um (entra|acessa|passa)|sem (credencial|autentic)|libera(do)? sem/i, padrao: "process\\.env\\.[A-Z_]*(PASS|USER|SECRET|TOKEN)|verify\\s*=\\s*false|===\\s*process\\.env" },
-  // timing-compare: exclui `Objects.equals(...)` (igualdade de entity, não segurança — falso-positivo do accountfy).
+  // timing-compare: exclui `Objects.equals(...)` (igualdade de entity, não segurança — falso-positivo comum em Java).
   { classe: "timing-compare", intencao: /forj(ar|a|am)|se passar (por|como)|assinatura (fraca|falsa|burl)|d[áa] pra (passar|forjar|fingir|burlar)|seguran[çc]a (falou|disse|achou)|burlar|spoofar/i, padrao: "(signature|hmac|verifytoken|verify_token|digest)\\s*(==|!=)\\s*(?!null)|(?<!Objects)\\.equals\\([^)]*(signature|hmac|token|secret)" },
   // wrong-equality: comparar VALOR com operador de IDENTIDADE. CONCEITO universal, ASSINATURA por linguagem (gateada).
   // Java: `x == "lit"` compara referência (bug). Em Kotlin/Python `==` é valor (correto) → NÃO entram no pack.

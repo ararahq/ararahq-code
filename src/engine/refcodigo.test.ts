@@ -36,7 +36,7 @@ describe("pareceReferenciaCodigo — caminhos e identificadores", () => {
   })
   test("camelCase e PascalCase com 2+ palavras", () => {
     expect(pareceReferenciaCodigo("o isShared volta null")).toBe(true)
-    expect(pareceReferenciaCodigo("no AraraPhoneNumberService")).toBe(true)
+    expect(pareceReferenciaCodigo("no LedgerService")).toBe(true)
   })
   test("palavra única capitalizada NÃO é código (prosa/tecnologia solta)", () => {
     expect(pareceReferenciaCodigo("gosto de Java")).toBe(false)
@@ -54,7 +54,7 @@ describe("pareceReferenciaCodigo — caminhos e identificadores", () => {
 describe("refsNoIndice — index-first", () => {
   const indice: IndiceParaRef = {
     simbolos: [{ arquivo: "src/agent/router.ts" }, { arquivo: "lib/pool.go" }],
-    reverso: { AraraPhoneNumberService: ["a.kt"], pool: ["lib/pool.go"] },
+    reverso: { LedgerService: ["a.kt"], pool: ["lib/pool.go"] },
   }
 
   test("confirma token que é arquivo real do índice (por base name)", () => {

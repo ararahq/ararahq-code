@@ -43,7 +43,7 @@ async function sintetizar(raiz: string): Promise<string> {
     prompt: `Evidências do projeto:\n\n${ev}\n\nEscreva o contexto.`,
     temperature: 0.2,
   })
-  return `# Contexto do Projeto\n\n_Sintetizado automaticamente pelo Arara Code._\n\n${text.trim()}\n`
+  return `# Contexto do Projeto\n\n_Sintetizado automaticamente pelo Jade Code._\n\n${text.trim()}\n`
 }
 
 async function salvarCache(raiz: string, md: string): Promise<void> {

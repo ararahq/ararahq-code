@@ -13,10 +13,11 @@ const MAX_PASSOS = Number(process.env.MAX_PASSOS ?? "6") // teto de passos; 6 me
 // Budget de tempo INTERNO do loop: para de adicionar passos quando estoura, e força a conclusão a partir
 // do que já investigou. Converte "timeout (perde tudo)" em "conclui do parcial" (CAUSA ou NÃO CRAVEI
 // honesto) ANTES do abort externo. É o que mata o timeout de verdade — teto de passos não cobre passo lento.
-const BUDGET_MS = Number(process.env.NAV_BUDGET_MS ?? "90000")
+const BUDGET_MS = Number(process.env.NAV_BUDGET_MS ?? "70000")
 // Deadline DURO (backstop): se o loop OU a conclusão forçada estourarem (passo lento), aborta e devolve
 // abstenção honesta do parcial — garante que o nav NUNCA bate o timeout externo (= zero "timeout perdido").
-const DEADLINE_MS = Number(process.env.NAV_DEADLINE_MS ?? "150000")
+// 110s dá folga grande abaixo do budget de produção (~200s): mesmo uma chamada-em-voo lenta (~50s) não passa.
+const DEADLINE_MS = Number(process.env.NAV_DEADLINE_MS ?? "110000")
 const MAX_HITS_BUSCA = 12
 const MAX_VIZINHOS = 20
 const ORDEM_CONCLUIR =

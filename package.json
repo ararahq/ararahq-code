@@ -1,6 +1,6 @@
 {
   "name": "jade-code",
-  "version": "0.1.38",
+  "version": "0.1.39",
   "description": "Jade Code — terminal coding agent. The architecture is the product, not the model. Bring your own OpenRouter key.",
   "license": "Apache-2.0",
   "author": "Micael Marques (https://github.com/micaelmrsilva)",

@@ -84,13 +84,13 @@ Cada marcha é um modelo diferente, roteado pela Camada 3 — e isso é **aberto
 | **M1 — trivial** | conversa, meta-pergunta | Ollama local (sem ele, cai no v4-flash) | ~0 (local) |
 | **M2 — execução** | instrução cirúrgica pronta | deepseek-v4-flash | 0.09 · 0.18 |
 | **M3 — diagnóstico** | sintoma sem causa, stack trace | deepseek-v4-pro | 0.44 · 0.87 |
-| **M4 — loop longo** | escopo amplo, multi-arquivo | kimi-k2.6 (via Maestro: v4-pro planeja, v4-flash executa) | 0.68 · 3.42 |
+| **M4 — loop longo** | escopo amplo, multi-arquivo | minimax-m3 (via Maestro: v4-pro planeja, v4-flash executa) | 0.30 · 1.20 |
 | **M5 — executar diagnóstico** | aplicar o mastigado da M3 | volta pra M2 | 0.09 · 0.18 |
 
 **Cadeia de escalada do diagnóstico** — só sobe se o degrau de baixo não cravar (`arquivo:linha`, sem hedge), sempre sobre o **mesmo material** já reunido:
 
 ```
-deepseek-v4-flash -> deepseek-v4-pro -> gemini-3.1-pro-preview -> gpt-5.5 -> claude-opus-4.8
+deepseek-v4-flash -> deepseek-v4-pro -> qwen3.7-plus -> glm-5.2
 ```
 
 Começa barato e paga o forte só onde forte importa — a maioria das tarefas morre nos dois primeiros degraus. Na tela, as métricas mostram tokens/custo/tempo de cada tarefa; o modelo que cada uma usou fica registrado por tarefa em `~/.arara/custo.json`.
@@ -232,7 +232,7 @@ A tese "medir, não sentir" é central. Roteamento e seleção de contexto se me
 - **Toda mudança de versão é commitada e enviada pra `main`.**
 - Commits: uma linha, `tipo(escopo): descrição`, presente do indicativo, sem body.
 
-Versão atual: **0.1.38**.
+Versão atual: **0.1.39**.
 
 ---
 

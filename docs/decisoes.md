@@ -8,7 +8,8 @@ Este arquivo guarda as decisões **medidas**, os caminhos **refutados** e as **a
 
 ## Roteamento e escalada (router, recovery)
 
-- **Cadeia de diagnóstico começa barata** (v4-flash → v4-pro → gemini-3.1-pro → gpt-5.5 → opus-4.8). O barato crava bug simples com contexto bom; o titular é o v4-pro (SWE ~80% por fração do custo dos grandes).
+- **Cadeia de diagnóstico começa barata** (v4-flash → v4-pro → qwen3.7-plus → glm-5.2). O barato crava bug simples com contexto bom; o titular é o v4-pro (SWE ~80% por fração do custo dos grandes).
+- **Lineup restrito por decisão de produto (02/jul/2026):** só modelos da shortlist OpenRouter do dono + Ollama local. Saíram kimi-k2.6 (loop longo → minimax-m3), gemini-3.1-pro/gpt-5.5/opus-4.8 (topo da cadeia → qwen3.7-plus/glm-5.2); compreender foi pra gemini-2.5-flash-lite (~107 t/s, volume de leitura). **Atenção: todos os números medidos do corpus (cravada 31%, timeout 25%, nav 5/8) são do lineup ANTERIOR — re-medição pendente.** Slugs e preços validados ao vivo na API `/models` na troca.
 - **Só escala quando o material justifica (par preciso).** Medido: escalar sobre superfície escopada custa ~60× e **não converte** — variância do modelo, e bug sutil pede par, não dump. Sem par = 1 passada e devolve.
 - **Subir thinking no MESMO modelo antes de trocar de modelo** — pensar mais é mais barato que modelo maior.
 - **Esforço por degrau:** 1ª passada (barato) = medium — high no barato era lento sem ganhar confiabilidade; escalou = high.

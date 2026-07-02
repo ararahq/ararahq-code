@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 import {
   ancorarAlvo,
   notaAncoragem,
+  pareceBugDeSintoma,
   linhasDeImport,
   conectadosPorImport,
   diagnosticoAncoraNoAlvo,
@@ -50,6 +51,23 @@ describe("ancorarAlvo", () => {
 
   test("lista de arquivos vazia não ancora", () => {
     expect(ancorarAlvo("o modal de feedback não fecha", [])).toBeNull()
+  })
+})
+
+describe("pareceBugDeSintoma", () => {
+  test("casa verbo de conserto e negação de comportamento (PT e EN)", () => {
+    expect(pareceBugDeSintoma("o X do modal de feedback não está fechando. conserta isso.")).toBe(true)
+    expect(pareceBugDeSintoma("o modal não fecha quando clico")).toBe(true)
+    expect(pareceBugDeSintoma("corrige o botão de fechar")).toBe(true)
+    expect(pareceBugDeSintoma("o filtro parou de funcionar")).toBe(true)
+    expect(pareceBugDeSintoma("the close button doesn't work")).toBe(true)
+    expect(pareceBugDeSintoma("fix the feedback modal close button")).toBe(true)
+  })
+
+  test("NÃO casa pedido de feature nova (criar arquivo segue livre)", () => {
+    expect(pareceBugDeSintoma("adiciona um botão de feedback no dashboard")).toBe(false)
+    expect(pareceBugDeSintoma("cria um modal de confirmação pro delete")).toBe(false)
+    expect(pareceBugDeSintoma("melhora o espaçamento do card de billing")).toBe(false)
   })
 })
 

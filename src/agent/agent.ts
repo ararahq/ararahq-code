@@ -17,7 +17,7 @@ import { pareceSeguimento, pontuarDiff, type Modo } from "../engine/marques"
 import { pareceMultiPasso, planejar, ferramentasDaFase, type Passo } from "./planner"
 import { diagnosticarComFallback, reunirMaterial, gerarCandidatosDiagnostico } from "./diagnostico"
 import { pareceConsertarBuild, aterrarPorBuild } from "./grounding"
-import { ancorarAlvo, notaAncoragem, diagnosticoAncoraNoAlvo, montarRespostaForaDoAlvo, type AlvoAncorado } from "./alvo"
+import { ancorarAlvo, notaAncoragem, pareceBugDeSintoma, diagnosticoAncoraNoAlvo, montarRespostaForaDoAlvo, type AlvoAncorado } from "./alvo"
 import { listarFontes } from "../conhecimento/walk"
 import { registrarBaseline, baselineAtual, compararComBaseline, rotuloFalha } from "./baseline"
 import { anexarImagens, type ParteImagem } from "./imagem"
@@ -1117,7 +1117,20 @@ export async function processar(input: string, imagens: ParteImagem[] = []) {
     }
     // 4.3-ESCOPO em execução GUIADA: o escopo são os arquivos que o usuário citou no pedido. Sem
     // citação => modo livre (escopoDoDiagnostico sem arquivo é livre), autonomia geral preservada.
-    definirEscopo(escopoDoDiagnostico(input))
+    const escopoInput = escopoDoDiagnostico(input)
+    definirEscopo(escopoInput)
+    // Ancoragem no alvo em EXECUÇÃO: "conserta o X do modal de feedback" roteia pra cá (imperativo),
+    // e sem trava a edição fica livre pra "consertar" um componente parecido que ninguém pediu.
+    // Só pra CONSERTO com alvo em prosa (feature nova não trava — pode criar arquivo à vontade).
+    if (escopoInput.livre && pareceBugDeSintoma(input)) {
+      const alvoExec = await ancorarAlvoDoRepo(input)
+      if (alvoExec) {
+        definirEscopo(escopoDeArquivos(alvoExec.arquivos))
+        tarefa = `${input}${notaAncoragem(alvoExec)}`
+        ui.subItem(`alvo apontado: ${alvoExec.arquivos.join(", ")}`)
+        logInterno(`alvo ancorado (execucao) em [${alvoExec.arquivos.join(", ")}] por termos [${alvoExec.termos.join(", ")}]`)
+      }
+    }
   }
 
   const passoRef = { atual: 0 }

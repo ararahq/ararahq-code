@@ -60,6 +60,19 @@ export function ancorarAlvo(input: string, arquivos: string[]): AlvoAncorado | n
   return { termos: [...porTermo.keys()], arquivos: alvos }
 }
 
+// O pedido é um CONSERTO de comportamento (verbo de fix ou negação de comportamento)? É o gatilho
+// pra ancorar também no modo EXECUÇÃO: "conserta o X do modal de feedback" roteia pra execução
+// (imperativo direto), e sem a trava a edição fica livre pra "consertar" um componente parecido.
+// Pedido de feature ("adiciona um botão de feedback") não casa — criar arquivo novo segue livre.
+const RE_CONSERTO = /\b(consert\w*|corrig\w*|arrum\w*|fix\w*|resolv\w*|repar\w*)\b/i
+const RE_SINTOMA =
+  /\bn[ãa]o\s+(est[áa]\s+)?[\wáéíóúâêôãõç]+|\bquebrad\w*|\bparou\s+de\b|\bdeixou\s+de\b|\bbroken\b|\bdoesn'?t\b|\bnot\s+work\w*|\bstopped\b/i
+
+/** O pedido é conserto de comportamento (não feature nova)? Determinístico, PT/EN. */
+export function pareceBugDeSintoma(input: string): boolean {
+  return RE_CONSERTO.test(input) || RE_SINTOMA.test(input)
+}
+
 /** Nota anexada ao sintoma ANTES do diagnóstico: ancora a investigação no alvo apontado. */
 export function notaAncoragem(alvo: AlvoAncorado): string {
   return (

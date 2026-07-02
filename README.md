@@ -43,6 +43,7 @@ Decide, **sem chamar modelo**, qual marcha pega cada tarefa:
 ### Camada 4 — Verificação e recuperação (`src/agent/camada4.ts` + `recovery.ts`)
 As travas que impedem o agente de fazer besteira:
 - **Scope guard:** só edita o que foi diagnosticado. Achou outros pontos parecidos? **Lista e pergunta** ("cada um pode ter semântica diferente") em vez de corrigir por conta.
+- **Ancoragem no alvo** (`alvo.ts`): "conserta o X do modal de feedback" trava a edição no componente que **você** apontou (termo→arquivo por raridade, zero modelo). Diagnóstico que crava em outro componente desconectado vira **abstenção honesta** ("teu alvo parece correto; achei algo em Y — confirma?") em vez de conserto que ninguém pediu com build verde.
 - **Test-gate determinístico:** editou código → o build do subprojeto tocado **precisa** ficar verde antes de declarar pronto.
 - **Contorno de ambiente agnóstico:** build falhou por runtime/toolchain incompatível (Java, Node, Python, Go, Rust...) → classifica como ambiente, tenta o contorno (ex.: `JAVA_HOME` compatível) e, se não resolver, **devolve honesto**. Nunca vira loop de `find`/`grep`/`sed`.
 - **Trava de trajetória longa:** passou do teto de passos sem fechar → para, resume e devolve, em vez de rodar cego.
@@ -76,29 +77,39 @@ export ARARA_SKILLS_DIRS="/caminho/skills:/outro/caminho"   # skills de fora (ex
 
 ## Jade — as 5 marchas
 
-O usuário **sempre vê só "Jade"**. Por baixo, cada marcha é um modelo diferente, roteado pela Camada 3. A façade é parte do produto.
+Cada marcha é um modelo diferente, roteado pela Camada 3 — e isso é **aberto, sem segredo**: os modelos e preços abaixo vêm direto do [`router.ts`](src/agent/router.ts). A tese é que o roteamento + scaffold é o que gera o resultado; trocar um modelo é trocar uma constante, a arquitetura não muda.
 
-| Marcha | Quando | Motor | Custo (USD / 1M in·out) |
+| Marcha | Quando | Motor (hoje) | Custo (USD / 1M in·out) |
 |---|---|---|---|
-| **M1 — trivial** | conversa, meta-pergunta | Ollama local | ~0 |
-| **M2 — execução** | instrução cirúrgica pronta | deepseek-v3.2 | 0.28 · 0.42 |
-| **M3 — diagnóstico** | sintoma sem causa, stack trace | gemini-3.1-pro-preview | 2.0 · 12.0 |
+| **M1 — trivial** | conversa, meta-pergunta | Ollama local (opcional) | ~0 |
+| **M2 — execução** | instrução cirúrgica pronta | deepseek-v4-flash | 0.10 · 0.20 |
+| **M3 — diagnóstico** | sintoma sem causa, stack trace | deepseek-v4-pro | 0.44 · 0.87 |
 | **M4 — loop longo** | escopo amplo, multi-arquivo | kimi-k2.6 | 0.68 · 3.42 |
-| **M5 — executar diagnóstico** | aplicar o mastigado da M3 | volta pra M2 | 0.28 · 0.42 |
+| **M5 — executar diagnóstico** | aplicar o mastigado da M3 | volta pra M2 | 0.10 · 0.20 |
 
-**Cadeia de fallback invisível do diagnóstico:** se a M3 não cravar (sem `arquivo:linha`, linguagem hedge), o **mesmo material** é repassado pro próximo modelo — gemini → gpt-5.5 → opus — uma passada cada. O usuário continua vendo só "Jade · diagnóstico".
+**Cadeia de escalada do diagnóstico** — só sobe se o degrau de baixo não cravar (`arquivo:linha`, sem hedge), sempre sobre o **mesmo material** já reunido:
 
-> **Regra de ouro:** o nome do modelo, o thinking e a marcha **nunca** vazam pro usuário final. Métricas na tela mostram só tokens/custo/tempo; o modelo real fica no log interno.
+```
+deepseek-v4-flash -> deepseek-v4-pro -> gemini-3.1-pro-preview -> gpt-5.5 -> claude-opus-4.8
+```
+
+Começa barato e paga o forte só onde forte importa — a maioria das tarefas morre nos dois primeiros degraus. Na tela, as métricas mostram tokens/custo/tempo de cada tarefa; o modelo que cada uma usou fica registrado por tarefa em `~/.arara/custo.json`.
 
 ---
 
 ## Instalação
 
-Precisa do [Bun](https://bun.sh) (`curl -fsSL https://bun.sh/install | bash`).
+**Um comando** (instala o [Bun](https://bun.sh) se faltar e o `jade-code` global — leia o [`install.sh`](install.sh), é curto):
 
 ```bash
-# opção A — instalar o comando `jade-code` global, direto do GitHub:
-bun install -g github:ararahq/ararahq-code
+curl -fsSL https://raw.githubusercontent.com/ararahq/ararahq-code/main/install.sh | bash
+```
+
+Ou na mão, se já tem Bun:
+
+```bash
+# opção A — comando `jade-code` global, direto do GitHub:
+bun add -g github:ararahq/ararahq-code
 
 # opção B — clonar e linkar (bom pra hackear no código):
 git clone https://github.com/ararahq/ararahq-code.git
@@ -180,10 +191,11 @@ bun run sandbox:build                    # builda a imagem do sandbox (docker)
 src/
 ├─ index.ts            entrypoint do CLI (bin: jade-code)
 ├─ agent/
-│  ├─ agent.ts         loop agêntico, pipeline de 2 fases, fachada Jade
+│  ├─ agent.ts         loop agêntico, pipeline de 2 fases
 │  ├─ router.ts        Camada 3 — roteamento, test-time compute, reclassificação
+│  ├─ alvo.ts          ancoragem no alvo citado — conserto trava no componente que o usuário apontou
 │  ├─ maestro.ts       orquestração de tarefa complexa (decompõe -> executa -> verifica -> checkpoint)
-│  ├─ diagnostico.ts   raciocínio single-pass + cadeia de fallback invisível
+│  ├─ diagnostico.ts   raciocínio single-pass + cadeia de escalada de modelos
 │  ├─ contexto.ts      Camada 2 — montagem por comparação pareada
 │  ├─ camada4.ts       scope guard, test-gate, contorno de ambiente, trajetória
 │  ├─ recovery.ts      escada de erro (código vs ambiente), teto de tentativas
@@ -220,7 +232,7 @@ A tese "medir, não sentir" é central. Roteamento e seleção de contexto se me
 - **Toda mudança de versão é commitada e enviada pra `main`.**
 - Commits: uma linha, `tipo(escopo): descrição`, presente do indicativo, sem body.
 
-Versão atual: **0.1.35**.
+Versão atual: **0.1.36**.
 
 ---
 

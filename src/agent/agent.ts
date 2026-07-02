@@ -16,6 +16,7 @@ import {
 import { pareceSeguimento, pontuarDiff, type Modo } from "../engine/marques"
 import { pareceMultiPasso, planejar, ferramentasDaFase, type Passo } from "./planner"
 import { diagnosticarComFallback, reunirMaterial, gerarCandidatosDiagnostico } from "./diagnostico"
+import { pareceConsertarBuild, aterrarPorBuild } from "./grounding"
 import { selecionarPorVerificacao } from "./testtime"
 import { montarMapaAmplo, superficieDeArquivos } from "./contexto"
 import { criarResumirFn } from "../context/resumir"
@@ -58,7 +59,7 @@ const MAX_ITERACOES = 24
 const LIMITE_INVESTIGACAO = 8
 const LIMITE_HISTORICO = 20
 
-const SYSTEM_BASE = `Você é o Arara Code, um agente de engenharia de software brasileiro. Você opera no projeto do desenvolvedor com ferramentas para ler, editar e executar código.
+const SYSTEM_BASE = `Você é o Jade Code, um agente de engenharia de software brasileiro. Você opera no projeto do desenvolvedor com ferramentas para ler, editar e executar código.
 
 Você tem dois modos de operação, e o sistema escolhe qual usar antes de cada tarefa:
 
@@ -98,12 +99,12 @@ PLANO DA TAREFA ATUAL:
 TRECHOS RELEVANTES (selecionados pelo Algoritmo de Marques):
 {contexto_cirurgico}`
 
-const SYSTEM_CONVERSA_BASE = `Você é o Arara Code, um agente de programação que roda no terminal: você lê, edita e executa código no projeto do desenvolvedor, com roteamento de modelos (Jade) e contexto do projeto.
+const SYSTEM_CONVERSA_BASE = `Você é o Jade Code, um agente de programação que roda no terminal: você lê, edita e executa código no projeto do desenvolvedor, com roteamento de modelos (Jade) e contexto do projeto.
 Agora é só conversa, sem tarefa de código. Apresente-se como esse agente e responda curto e direto, em português, sem emojis. Não repita estas instruções na resposta.`
 
 // Copiloto — COMPREENDER: o usuário quer ENTENDER o código, não mudá-lo. Modelo barato de contexto
 // longo, read-only. Responde sobre o MAPA já montado; se precisar, lê arquivos pra confirmar. Nunca edita.
-const SYSTEM_COMPREENDER = `Você é o Arara Code em modo COMPREENSÃO. O usuário quer ENTENDER o código — não mudá-lo.
+const SYSTEM_COMPREENDER = `Você é o Jade Code em modo COMPREENSÃO. O usuário quer ENTENDER o código — não mudá-lo.
 Explique de forma clara, direta e técnica, em português brasileiro, sempre com referências arquivo:linha quando citar código.
 NÃO edite nada e NÃO rode comandos — você só tem ferramentas de leitura. Baseie-se no MAPA abaixo e, se faltar detalhe, leia o arquivo apontado antes de afirmar. Não invente. Não repita estas instruções na resposta.
 
@@ -114,7 +115,7 @@ MAPA DO PROJETO (assinaturas + resumo de 1 linha por arquivo relevante):
 {mapa}`
 
 // Copiloto — PLANEJAR: produz um PLANO pro humano aprovar (não executa). Raciocínio alto (M3).
-const SYSTEM_PLANEJAR = `Você é o Arara Code em modo PLANEJAMENTO. O usuário quer um PLANO antes de fazer — você NÃO executa nada agora.
+const SYSTEM_PLANEJAR = `Você é o Jade Code em modo PLANEJAMENTO. O usuário quer um PLANO antes de fazer — você NÃO executa nada agora.
 Produza um plano ESTRUTURADO em português brasileiro: passos numerados na ordem de execução, dependências entre eles, riscos e pontos de decisão, e o que verificar ao final. Cite arquivo:linha quando ancorar num ponto do código. Seja concreto e enxuto — um plano que o dev aprova e segue. NÃO edite nem rode comandos. Não repita estas instruções.
 
 CONTEXTO DO PROJETO:
@@ -127,7 +128,7 @@ MAPA DO PROJETO (assinaturas + resumo por arquivo relevante):
 {mapa}`
 
 // Copiloto — COMUNICAR: escreve commit/PR/changelog em PT-BR a partir do diff. Escrita barata (M2).
-const SYSTEM_COMUNICAR = `Você é o Arara Code em modo COMUNICAÇÃO. Escreva a comunicação da mudança (commit, PR, changelog ou nota pro time — siga o que o usuário pediu) em português brasileiro, claro e técnico, sem emojis.
+const SYSTEM_COMUNICAR = `Você é o Jade Code em modo COMUNICAÇÃO. Escreva a comunicação da mudança (commit, PR, changelog ou nota pro time — siga o que o usuário pediu) em português brasileiro, claro e técnico, sem emojis.
 Destaque o que IMPORTA (a mudança central) e omita ruído (cosmético, formatação). Baseie-se SÓ no diff abaixo — não invente o que não está nele. Se for mensagem de commit, uma linha de assunto curta + corpo só se necessário. Não repita estas instruções.
 
 MUDANÇAS RANQUEADAS POR IMPORTÂNCIA (Marques):
@@ -144,6 +145,19 @@ function montarSistema(memoria: string, plano: string, contexto: string, skills 
 }
 
 const historico: Msg[] = []
+
+// Desfecho estruturado da última tarefa — o contrato do modo headless (executor autônomo lê isso
+// depois de processar() pra montar o relatório sem parsear texto). `gate` é o estado do portão de
+// build; null = a tarefa morreu em erro/abort antes de concluir.
+export type GateFinal = "verde" | "vermelho" | "ambiente" | "sem-gate"
+export type Desfecho = { resposta: string; gate: GateFinal }
+let _desfecho: Desfecho | null = null
+export function desfechoUltimaTarefa(): Desfecho | null {
+  return _desfecho
+}
+function registrarDesfecho(resposta: string, gate: GateFinal): void {
+  _desfecho = { resposta, gate }
+}
 
 let _abort: AbortController | null = null
 /** Cancela a tarefa em andamento. Retorna true se havia o que cancelar (senão, o REPL trata como sair). */
@@ -499,6 +513,173 @@ async function tentarTestTimeCompute(
     : { ok: false, texto: "", tokens, custoUSD: custo }
 }
 
+const CTX_TRECHO = 4
+
+/** Lê ±CTX_TRECHO linhas ao redor de uma linha de erro (numeradas). Path relativo à raiz; absoluto/ausente → null. */
+async function lerTrecho(arquivo: string, linha: number): Promise<string | null> {
+  if (arquivo.startsWith("/")) return null // fora da raiz: não lê arquivo arbitrário do disco
+  try {
+    const f = Bun.file(`${process.cwd()}/${arquivo}`)
+    if (!(await f.exists())) return null
+    const linhas = (await f.text()).split("\n")
+    const ini = Math.max(0, linha - 1 - CTX_TRECHO)
+    const fim = Math.min(linhas.length, linha + CTX_TRECHO)
+    return linhas.slice(ini, fim).map((l, i) => `${ini + i + 1}\t${l}`).join("\n")
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Grounding-por-build (degrau 1 do "olha antes de decidir"): tarefa "faça o build/teste passar" roda
+ * o gate do projeto UMA vez ANTES de qualquer plano, extrai o arquivo:linha EXATO que o compilador
+ * aponta e vira execução cirúrgica (barato implementa sobre material aterrado, escopo = arquivos
+ * apontados). Mata os dois modos de falha medidos: o Maestro decompondo a frase crua no escuro, e o
+ * diagnóstico ancorando no nome do tipo em vez do arquivo que não compila. Devolve true se tratou;
+ * false se não é tarefa de build, não há gate determinável, ou o erro não tem local extraível (aí o
+ * caminho normal assume — não força âncora que não existe).
+ */
+async function consertarBuildAterrado(
+  input: string,
+  openrouter: ReturnType<typeof provedor>,
+  ctx: { completo: string },
+  skills = "",
+): Promise<boolean> {
+  if (!pareceConsertarBuild(input)) return false
+  const indice = await carregarIndice(process.cwd())
+  const comando = indice?.project.testCmd ?? indice?.project.buildCmd ?? null
+  if (!comando) return false
+
+  const inicio = Date.now()
+  const acP = new AbortController()
+  _abort = acP
+  ui.spinnerStart("Jade rodando o build pra achar o erro")
+  let at: Awaited<ReturnType<typeof aterrarPorBuild>>
+  try {
+    at = await aterrarPorBuild(input, {
+      raiz: process.cwd(),
+      comando,
+      rodar: async (cmd) => {
+        const r = await rodar(cmd, (l) => ui.linhaComando(l.slice(0, 200)), undefined, acP.signal)
+        return { code: r.code, saida: r.saida }
+      },
+      lerTrecho,
+    })
+  } catch {
+    ui.spinnerStop()
+    _abort = null
+    return false
+  }
+  ui.spinnerStop()
+  _abort = null
+  if (acP.signal.aborted) {
+    finalizarAbort()
+    return true
+  }
+  if (!at) return false // sem âncora clara → caminho normal (diagnóstico) assume
+
+  if (at.tipo === "ja-verde") {
+    const msg = "[Jade] rodei o build/teste do projeto e ele já está VERDE — não há nada a consertar."
+    ui.linhaBranca()
+    ui.resposta(msg)
+    ui.linhaBranca()
+    historico.push({ role: "user", content: input })
+    historico.push({ role: "assistant", content: msg })
+    registrarDesfecho(msg, "verde")
+    ui.metricas(0, 0, Date.now() - inicio)
+    await registrarTarefa({ modo: "execucao", modelo: "gate-only", thinking: false, tokens: 0, custoUSD: 0, ms: Date.now() - inicio })
+    return true
+  }
+
+  definirEscopo(escopoDeArquivos(at.arquivos))
+  logInterno(`grounding-build: aterrado em [${at.arquivos.join(", ")}]`)
+  ui.subItem(`erro apontado em: ${at.arquivos.join(", ")}`)
+  const sistema = montarSistema(ctx.completo, "", "", skills)
+  historico.push({ role: "user", content: input })
+
+  let totalIn = 0
+  let totalOut = 0
+  let resposta = ""
+  const r = await executarPassada({
+    model: openrouter(MODELOS.execucao) as Modelo,
+    sistema,
+    toolset: ferramentas,
+    plano: [],
+    thinking: false,
+    passoRef: { atual: 0 },
+    extra: [{ role: "user" as const, content: at.tarefa }],
+  })
+  totalIn += r.inTok
+  totalOut += r.outTok
+  resposta = r.resposta
+  if (r.abortado) {
+    finalizarAbort()
+    return true
+  }
+  if (r.erro) {
+    ui.erro(msgErro(r.erro))
+    historico.pop()
+    return true
+  }
+
+  let gate = await rodarTestGate()
+  if (gate.estado === "vermelho") {
+    const rFix = await executarPassada({
+      model: openrouter(MODELOS.execucao) as Modelo,
+      sistema,
+      toolset: ferramentas,
+      plano: [],
+      thinking: true,
+      passoRef: { atual: 0 },
+      extra: [
+        ...(resposta.trim() ? [{ role: "assistant" as const, content: resposta }] : []),
+        { role: "user" as const, content: INSTRUCAO_GATE_VERMELHO },
+      ],
+    })
+    totalIn += rFix.inTok
+    totalOut += rFix.outTok
+    if (rFix.resposta.trim()) resposta = rFix.resposta
+    if (rFix.abortado) {
+      finalizarAbort()
+      return true
+    }
+    gate = await rodarTestGate()
+  }
+
+  let gateFinal: GateFinal = "sem-gate"
+  if (gate.estado === "verde") gateFinal = "verde"
+  else if (gate.estado === "ambiente") {
+    gateFinal = "ambiente"
+    resposta = `${resposta}\n\n[Jade] ${gate.mensagem}`
+  } else if (gate.estado === "vermelho") {
+    gateFinal = "vermelho"
+    resposta = `${resposta}\n\n[Jade] o build ainda não fechou verde — não declaro pronto.`
+  }
+
+  const tty = Boolean(process.stdout.isTTY)
+  if (resposta.trim()) {
+    if (tty) ui.streamCommit()
+    else {
+      ui.linhaBranca()
+      ui.resposta(resposta)
+    }
+  }
+  ui.linhaBranca()
+  historico.push({ role: "assistant", content: resposta })
+  registrarDesfecho(resposta, gateFinal)
+  const custo = custoUSD(MODELOS.execucao, totalIn, totalOut)
+  ui.metricas(totalIn + totalOut, custo, Date.now() - inicio)
+  await registrarTarefa({
+    modo: "execucao",
+    modelo: `grounding→${MODELOS.execucao}`,
+    thinking: false,
+    tokens: totalIn + totalOut,
+    custoUSD: custo,
+    ms: Date.now() - inicio,
+  })
+  return true
+}
+
 /**
  * Maestro — orquestração de tarefa complexa. Decompõe (modelo forte, 1 passada) em sub-objetivos e
  * roda CADA UM na máquina provada (diagnóstico opcional + execução + portão de build), com escopo e
@@ -536,11 +717,12 @@ async function orquestrarComplexo(
   const sistema = montarSistema(ctx.completo, "", "", skills)
   historico.push({ role: "user", content: input })
 
-  const finalizar = (rel: string) => {
+  const finalizar = (rel: string, gate: GateFinal) => {
     ui.linhaBranca()
     ui.resposta(rel)
     ui.linhaBranca()
     historico.push({ role: "assistant", content: rel })
+    registrarDesfecho(rel, gate)
     ui.metricas(tokensTotal, custoTotal, Date.now() - inicio)
     return registrarTarefa({
       modo: "loop-longo",
@@ -586,7 +768,7 @@ async function orquestrarComplexo(
       return true
     }
     if (r.erro) {
-      await finalizar(relatorioProgresso(plano, feitos, i, msgErro(r.erro)))
+      await finalizar(relatorioProgresso(plano, feitos, i, msgErro(r.erro)), "sem-gate")
       return true
     }
 
@@ -615,12 +797,12 @@ async function orquestrarComplexo(
 
     if (gate.estado === "ambiente") {
       feitos.push({ descricao: sub.descricao, estado: "sem-gate" })
-      await finalizar(relatorioProgresso(plano, feitos, i, gate.mensagem))
+      await finalizar(relatorioProgresso(plano, feitos, i, gate.mensagem), "ambiente")
       return true
     }
     if (gate.estado === "vermelho") {
       feitos.push({ descricao: sub.descricao, estado: "travou" })
-      await finalizar(relatorioProgresso(plano, feitos, i, "o build não fechou verde após o conserto"))
+      await finalizar(relatorioProgresso(plano, feitos, i, "o build não fechou verde após o conserto"), "vermelho")
       return true
     }
 
@@ -628,12 +810,16 @@ async function orquestrarComplexo(
     historico.push({ role: "assistant", content: `sub-objetivo ${i + 1} concluído: ${sub.descricao}` })
   }
 
-  await finalizar(relatorioProgresso(plano, feitos, null, ""))
+  await finalizar(
+    relatorioProgresso(plano, feitos, null, ""),
+    feitos.length && feitos.every((f) => f.estado === "verde") ? "verde" : "sem-gate",
+  )
   return true
 }
 
 export async function processar(input: string) {
   novaRodada()
+  _desfecho = null
   const ctx = await carregarContexto()
 
   // 3.7 — roteamento index-first: o índice da Camada 1 (se já existe) confirma referências de código
@@ -706,6 +892,14 @@ export async function processar(input: string) {
     logInterno(`skills: falha ao ativar (${msgErro(e)})`)
   }
 
+  // Grounding-por-build (olha ANTES de decidir): tarefa "faça o build/teste passar" roda o gate uma
+  // vez, extrai o arquivo:linha exato do erro e vira execução cirúrgica — em vez de o Maestro
+  // decompor no escuro ou o diagnóstico ancorar no nome do tipo. Sem âncora, segue o caminho normal.
+  if (!heranca) {
+    const tratado = await consertarBuildAterrado(input, openrouter, ctx, blocoSkills)
+    if (tratado) return
+  }
+
   // Tarefa COMPLEXA (marcha de loop longo): o Maestro decompõe em sub-objetivos e orquestra cada um
   // na máquina provada, com checkpoint. Se a decomposição for atômica/falhar, segue o caminho normal.
   if (!heranca && ehComplexo(decisao)) {
@@ -762,11 +956,16 @@ export async function processar(input: string) {
         })
         historico.push({ role: "user", content: input })
         historico.push({ role: "assistant", content: respostaTTC })
+        registrarDesfecho(respostaTTC, "verde")
         return
       }
       // nem o test-time compute fechou — NÃO manda lixo pra execução. Falha honesta ao usuário.
       ui.aviso("não cravei a causa com confiança.")
-      ui.subItem("me aponta a direção (ex: 'olha no AraraPhoneNumberService') que eu vou direto.")
+      ui.subItem("me aponta a direção (ex: 'olha no PaymentService') que eu vou direto.")
+      registrarDesfecho(
+        `${d.texto}\n\n[Jade] Não cravei a causa com confiança — não vou editar no escuro. Me aponta a direção (ex: 'olha no PaymentService') que eu vou direto.`,
+        "sem-gate",
+      )
       ui.metricas(d.tokens + ttc.tokens, d.custoUSD + ttc.custoUSD, d.ms)
       await registrarTarefa({
         modo,
@@ -926,14 +1125,16 @@ export async function processar(input: string) {
   // 4.1 TEST-GATE + 4.3-coerência (trajetória longa): se a tarefa editou código, o build do
   // subprojeto tocado PRECISA passar antes de aceitar. Vermelho => UMA passada de conserto guiada
   // (com instrução de só consertar, nada de edit novo). Determinístico: não depende do modelo lembrar.
-  let gateVerde = false
+  let gateFinal: GateFinal = "sem-gate"
   if (precisaTestGate(houveEdicao())) {
     const g = await rodarTestGate()
     if (g.estado === "verde") {
-      gateVerde = true
+      gateFinal = "verde"
     } else if (g.estado === "ambiente") {
+      gateFinal = "ambiente"
       respostaFinal = `${respostaFinal}\n\n[Jade] ${g.mensagem}`
     } else if (g.estado === "vermelho") {
+      gateFinal = "vermelho"
       ui.aviso("build vermelho após a edição — consertando antes de fechar.")
       const rGate = await executarPassada({
         model: openrouter(modeloAtual) as Modelo,
@@ -961,10 +1162,11 @@ export async function processar(input: string) {
       }
       const g2 = await rodarTestGate()
       if (g2.estado === "verde") {
-        gateVerde = true
+        gateFinal = "verde"
       } else if (g2.estado === "vermelho") {
         respostaFinal = `${respostaFinal}\n\n[Jade] o build ainda não está verde — não declaro pronto. ${INSTRUCAO_TRAJETORIA_LONGA}`
       } else if (g2.estado === "ambiente") {
+        gateFinal = "ambiente"
         respostaFinal = `${respostaFinal}\n\n[Jade] ${g2.mensagem}`
       }
     }
@@ -973,7 +1175,7 @@ export async function processar(input: string) {
   // 1.5 — fix de diagnóstico verificado (build verde): registra o bug resolvido na memória do projeto
   // (sintoma -> causa raiz -> arquivo:linha -> correção). Alimenta buscarPrecedente nas próximas tarefas.
   // Degrada com graça: memória é serviço auxiliar — falhar aqui NÃO derruba a tarefa que já fechou.
-  if (gateVerde && modoFinal === "diagnostico" && diagTexto) {
+  if (gateFinal === "verde" && modoFinal === "diagnostico" && diagTexto) {
     try {
       await registrarBug(process.cwd(), montarRegistroBug(input, diagTexto, arquivosEditados()))
       logInterno("memoria: bug registrado")
@@ -1019,6 +1221,7 @@ export async function processar(input: string) {
     ms: Date.now() - inicio,
   })
   historico.push({ role: "assistant", content: respostaFinal })
+  registrarDesfecho(respostaFinal, gateFinal)
 }
 
 async function processarConversa(input: string, ctx: { resumo: string }, modeloCloud: string) {
@@ -1115,6 +1318,7 @@ async function processarConversa(input: string, ctx: { resumo: string }, modeloC
   ui.metricas(inTok + outTok, custo, Date.now() - inicio)
   await registrarTarefa({ modo: "conversa", modelo: modeloNome, thinking: false, tokens: inTok + outTok, custoUSD: custo, ms: Date.now() - inicio })
   historico.push({ role: "assistant", content: resposta })
+  registrarDesfecho(resposta, "sem-gate")
 }
 
 /**
@@ -1209,6 +1413,7 @@ async function streamLeitura(
   ui.metricas(inTok + outTok, custo, Date.now() - inicio)
   await registrarTarefa({ modo, modelo: modeloCloud, thinking, tokens: inTok + outTok, custoUSD: custo, ms: Date.now() - inicio })
   historico.push({ role: "assistant", content: resposta })
+  registrarDesfecho(resposta, "sem-gate")
 }
 
 const MAX_CORPOS_COMPREENDER = 5

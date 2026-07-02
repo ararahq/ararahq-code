@@ -1,12 +1,35 @@
+#!/usr/bin/env bun
 import { ui } from "./terminal/ui"
 import { processar, cancelar } from "./agent/agent"
 import { Backup } from "./tools/backup"
 import { modeloOllama } from "./llm/ollama"
-import { provedor } from "./llm/openrouter"
 import { carregarContexto } from "./context/projeto"
 import { garantirSintese, inicializarProjeto } from "./context/init"
 import { custoSessao, custoMes, mesAtual, historicoTarefas } from "./agent/custo"
 import { descobrirSkills } from "./skills/skills"
+import { carregarConfigGlobal, configurarChave } from "./config/env"
+
+// Config "uma vez": ~/.arara/.env -> process.env (sem sobrescrever export do shell nem .env do cwd).
+carregarConfigGlobal()
+
+// Modo autônomo (Devin-mode): `jade-code --tarefa "<instrução>"` roda UMA tarefa sem REPL e imprime
+// o relatório JSON no stdout. É a porta usada pelo sandbox; nada interativo acontece neste caminho.
+// exit 0 = concluiu (verde/sem-gate/sem-mudanca) · exit 1 = vermelho/erro.
+const iTarefa = process.argv.indexOf("--tarefa")
+if (iTarefa >= 0) {
+  const instrucao = process.argv
+    .slice(iTarefa + 1)
+    .join(" ")
+    .trim()
+  if (!instrucao) {
+    console.error('uso: jade-code --tarefa "<instrução>"')
+    process.exit(2)
+  }
+  const { executarTarefa } = await import("./autonomo/executor")
+  const rel = await executarTarefa(instrucao)
+  console.log(JSON.stringify(rel))
+  process.exit(rel.estado === "erro" || rel.estado === "vermelho" ? 1 : 0)
+}
 
 let encerrando = false
 function sair(): never {
@@ -29,9 +52,10 @@ ui.renderHeader()
 void modeloOllama()
 void carregarContexto()
 void garantirSintese()
-try {
-  provedor()
-} catch {}
+if (!process.env.OPENROUTER_API_KEY) {
+  const chave = await configurarChave({ temTTY: Boolean(process.stdin.isTTY), perguntar: ui.perguntar, ui })
+  if (chave) process.env.OPENROUTER_API_KEY = chave
+}
 
 function ajuda() {
   ui.subItem("/ajuda    esta ajuda")

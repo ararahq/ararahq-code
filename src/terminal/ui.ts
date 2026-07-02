@@ -1,8 +1,10 @@
 import { renderMarkdown } from "./markdown"
 import { blindarFachada } from "../security/sanitize"
 
-const BRAND = [95, 188, 199]
-const BRAND_DEEP = [28, 153, 167]
+// Paleta ancorada nos tokens da identidade Arara (ararahq-identidade.pen / globals.css).
+// brand-400 = teal vivo (primário), brand-500 = teal profundo (moldura/mascote). Não invente tom fora do ramp.
+const BRAND = [56, 209, 216] // brand-400 #38d1d8
+const BRAND_DEEP = [28, 153, 167] // brand-500 #1c99a7
 const TEXT = [244, 248, 250]
 const DIM = [118, 160, 166]
 const WARN = [247, 185, 85]
@@ -98,10 +100,18 @@ async function* gerarLinhas(): AsyncGenerator<string> {
 }
 const iterLinhas = gerarLinhas()
 async function lerLinha(prompt: string): Promise<string | null> {
+  if (_headless) return null
   revelarCursor()
   process.stdout.write(prompt)
   const r = await iterLinhas.next()
   return r.done ? null : r.value
+}
+
+// Modo headless (sandbox/CI): NUNCA lê stdin — num container sem TTY, esperar input trava pra
+// sempre. prompt/perguntar devolvem null e confirmar() NEGA: comando perigoso não roda sem humano.
+let _headless = false
+export function ativarHeadless(): void {
+  _headless = true
 }
 
 const FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
@@ -196,13 +206,18 @@ export const ui = {
       { texto: "Novidades", estilo: "brandBold" },
       ...NOVIDADES.map((n): Cel => ({ texto: n, estilo: "dim" })),
     ]
-    const out = [dim("arara"), topo(`Arara Code v${PRODUTO}`), vazia()]
+    const out = [dim("jade-code"), topo(`Jade Code v${PRODUTO}`), vazia()]
     for (let i = 0; i < Math.max(esq.length, dir.length); i++) out.push(linhaDupla(esq[i], dir[i]))
     out.push(vazia(), base(), "")
     process.stdout.write(out.join("\n") + "\n")
   },
   prompt: (): Promise<string | null> => lerLinha(brand("▸ ")),
+  perguntar: (p: string): Promise<string | null> => lerLinha(p),
   async confirmar(p: string): Promise<boolean> {
+    if (_headless) {
+      console.log(warn(`⚠ headless: negado automaticamente — ${p}`))
+      return false
+    }
     const r = (await lerLinha(warn(`  ${p} [s/n] `))) ?? ""
     const v = r.trim().toLowerCase()
     return v === "s" || v === "sim" || v === "y"

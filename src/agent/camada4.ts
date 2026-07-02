@@ -202,7 +202,7 @@ const REGRAS_AMBIENTE: RegraAmbiente[] = [
   {
 
     detecta:
-      /unsupported class file|invalid source release|unsupportedclassversion|requires java|illegalargumentexception:\s*\d+\.\d+\.\d+|major version \d+|no compatible toolchains|incompatible.*\bjvm\b/i,
+      /unsupported class file|invalid source release|unsupportedclassversion|requires java|illegalargumentexception:\s*\d+\.\d+\.\d+|major version \d+|no compatible toolchains|incompatible.*\bjvm\b|what went wrong:\s*\r?\n\s*\d{1,3}(\.\d+){1,2}\b/i,
 
     aplica: /\b(gradlew|gradle|mvnw|mvn|maven|javac|kotlinc)\b/,
     contorno: (comando) => `${JAVA_HOME_COMPATIVEL}; ${comando}`,

@@ -204,10 +204,14 @@ src/
 ├─ conhecimento/       Camada 1 — índice, grafo, stack, símbolos, memória
 ├─ skills/             descoberta + ativação determinística de skills (formato Claude)
 ├─ engine/marques.ts   classificador de modo/sinais (stack trace, tamanho, hedge)
-├─ llm/                provedores OpenRouter + Ollama
+├─ llm/                provedor injetável (OpenRouter default via seam) + Ollama local
+├─ autonomo/           executor headless + sandbox (Devin-mode)
+├─ gateway/            webhooks assinados (WhatsApp/Slack/Discord/Linear/Jira) + fila SQLite
+├─ orquestrador/       despachante + drivers de sandbox (docker | Fly)
+├─ entrega/            branch -> commit -> push -> PR (token só via GIT_ASKPASS)
 ├─ security/sanitize.ts redação de secrets, path safety
 ├─ terminal/           UI, render de markdown no terminal
-└─ tools/              ler, listar, buscar, editar-ancorada, rodar-comando
+└─ tools/              ler, listar, buscar, editar-ancorada, rodar-comando (UI injetada)
 ```
 
 ---
@@ -221,6 +225,10 @@ src/
 - **Scope guard + test-gate** (Camada 4) impedem edição fora do diagnóstico e "pronto" com build vermelho.
 
 ---
+
+## Decisões de engenharia
+
+O código não tem comentários ([regra do projeto](CONTRIBUTING.md)) — cada decisão **medida**, caminho **refutado** e **armadilha** encontrada vive em [`docs/decisoes.md`](docs/decisoes.md), no formato decisão → evidência. Antes de "melhorar" o roteamento, a navegação ou os prompts, leia lá o que já foi tentado e não pagou.
 
 ## Avaliação (eval)
 
@@ -239,9 +247,10 @@ Versão atual: **0.1.39**.
 ## Roadmap
 
 - [x] 5.0 — skills no formato aberto do Claude, com ativação determinística (Marques)
-- [ ] 2.4 — subagente de busca isolado
-- [ ] 4.3 — checkpointing por sub-objetivo em loops longos
-- [ ] 1.4 — geração de resumos de arquivo sob demanda
+- [x] 4.3 — checkpointing por sub-objetivo em loops longos (Maestro)
+- [x] 1.4 — resumos de arquivo extrativos (Marques, zero token, cache por hash)
+- [ ] re-medição do corpus com o lineup atual de modelos
+- [ ] 2.4 — subagente de busca isolado (adiado: o índice determinístico cobre a maior parte)
 
 ---
 

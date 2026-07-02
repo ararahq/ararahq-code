@@ -1,7 +1,8 @@
 import { processar, desfechoUltimaTarefa, type Desfecho } from "../agent/agent"
 import { arquivosEditados } from "../agent/camada4"
 import { rodar } from "../tools"
-import { ativarHeadless } from "../terminal/ui"
+import { ativarHeadless, ui } from "../terminal/ui"
+import { configurarNotificador } from "../tools/notificador"
 import type { ParteImagem } from "../agent/imagem"
 import type { EstadoExecucao, RelatorioExecucao } from "./tipos"
 
@@ -25,6 +26,7 @@ function msgErro(e: unknown): string {
 
 export async function executarTarefa(instrucao: string, imagens: ParteImagem[] = []): Promise<RelatorioExecucao> {
   ativarHeadless()
+  configurarNotificador(ui)
   const inicio = Date.now()
   try {
     await processar(instrucao, imagens)

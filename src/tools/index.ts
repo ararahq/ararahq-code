@@ -4,7 +4,7 @@ import { readdir } from "node:fs/promises"
 import { existsSync } from "node:fs"
 import { spawn } from "node:child_process"
 import { dicaLocaisErro } from "../agent/erros"
-import { ui } from "../terminal/ui"
+import { notificador } from "./notificador"
 import { pathSeguro, sanitizar } from "../security/sanitize"
 import { Backup } from "./backup"
 import { registrarFalha, resetRecovery, TETO_RECOVERY } from "../agent/recovery"
@@ -245,7 +245,7 @@ export const ferramentas = {
       _leituras++
       const todas = (await Bun.file(f).text()).split("\n")
       const linhas = todas.slice(0, MAX_LINHAS)
-      ui.toolAcao("ler_arquivo", `${caminho} (${linhas.length} linhas)`)
+      notificador().toolAcao("ler_arquivo", `${caminho} (${linhas.length} linhas)`)
       const numeradas = sanitizar(linhas.join("\n"))
         .split("\n")
         .map((l, i) => `${i + 1}\t${l}`)
@@ -270,7 +270,7 @@ export const ferramentas = {
       const chave = `listar:${caminho ?? "."}`
       if (_rodada.has(chave)) return "Você já listou esse diretório nesta tarefa. Use o resultado anterior, não repita."
       _rodada.add(chave)
-      ui.toolAcao("listar_arquivos", caminho ?? ".")
+      notificador().toolAcao("listar_arquivos", caminho ?? ".")
       const acc: string[] = []
       await arvore(base, "", Math.max(1, Math.min(profundidade ?? 1, 4)) - 1, acc, { n: 0 })
       return acc.join("\n") || "(vazio)"
@@ -290,7 +290,7 @@ export const ferramentas = {
         return `Limite de buscas desta tarefa atingido. PARE de buscar; leia o arquivo de serviço/entidade mais provável e responda com o que já tem.`
       _rodada.add(chave)
       _buscas++
-      ui.toolAcao("buscar_no_projeto", query)
+      notificador().toolAcao("buscar_no_projeto", query)
       const { saida } = await rodar(comandoBusca(query), undefined, 15_000)
       return saida || `sem resultados para "${query}". Tente outro termo, ou liste o diretório provável e leia o arquivo direto.`
     },
@@ -333,9 +333,9 @@ export const ferramentas = {
       } else {
         novoConteudo = novo
       }
-      ui.toolAcao("editar_arquivo", caminho)
-      ui.motivo(motivo)
-      ui.diff(removido, novo)
+      notificador().toolAcao("editar_arquivo", caminho)
+      notificador().motivo(motivo)
+      notificador().diff(removido, novo)
       Backup.registrar(f, existe ? await Bun.file(f).text() : null)
       await Bun.write(f, novoConteudo)
       registrarEdicao(caminho, ancora ?? "", novo)
@@ -357,28 +357,28 @@ export const ferramentas = {
 
       if (!ehVerificacao(comando) && acaoRepetida("rodar_comando", comando))
         return `Você já rodou exatamente "${comando}" nesta tarefa e não é build/teste. Use o resultado anterior — não repita a mesma ação, avance pro próximo passo.`
-      ui.toolAcao("rodar_comando", comando)
+      notificador().toolAcao("rodar_comando", comando)
       if (PERIGOSOS.some((r) => r.test(comando))) {
-        ui.motivo(motivo)
-        if (!(await ui.confirmar("Executar? (destrutivo/externo)"))) return `usuário cancelou: ${comando}`
+        notificador().motivo(motivo)
+        if (!(await notificador().confirmar("Executar? (destrutivo/externo)"))) return `usuário cancelou: ${comando}`
       }
 
       let { code, saida, expirou, seg } = await executarComando(comando, opts?.abortSignal)
       if (expirou) {
-        ui.toolResultado(`timeout em ${seg}s — processo encerrado`)
+        notificador().toolResultado(`timeout em ${seg}s — processo encerrado`)
         return `[timeout ${seg}s] o comando passou do limite e foi morto. Saída parcial:\n${saida}`
       }
-      ui.toolResultado(`exit ${code} · ${(saida ? saida.split("\n").length : 0)} linha(s) · ${seg}s`)
+      notificador().toolResultado(`exit ${code} · ${(saida ? saida.split("\n").length : 0)} linha(s) · ${seg}s`)
 
       if (code !== 0 && ehVerificacao(comando) && !_contornoTentado) {
         const amb = contornoAmbiente(comando, saida)
         if (amb) {
           _contornoTentado = true
           if (amb.reexecutar) {
-            ui.linhaComando("ambiente: runtime incompatível — tentando contorno…")
-            ui.toolAcao("rodar_comando", amb.reexecutar)
+            notificador().linhaComando("ambiente: runtime incompatível — tentando contorno…")
+            notificador().toolAcao("rodar_comando", amb.reexecutar)
             const r2 = await executarComando(amb.reexecutar, opts?.abortSignal)
-            ui.toolResultado(`exit ${r2.code} · ${(r2.saida ? r2.saida.split("\n").length : 0)} linha(s) · ${r2.seg}s`)
+            notificador().toolResultado(`exit ${r2.code} · ${(r2.saida ? r2.saida.split("\n").length : 0)} linha(s) · ${r2.seg}s`)
             if (r2.code === 0) return `[exit 0] (contorno de ambiente aplicado: ${amb.reexecutar})\n${r2.saida}`
             return `[exit ${r2.code}]\n${r2.saida}\n\n--- ${amb.mensagem}`
           }
@@ -408,8 +408,8 @@ async function executarComando(comando: string, signal?: AbortSignal): Promise<R
   const { code, saida, expirou } = await rodar(
     comando,
     (l) => {
-      if (mostradas < 30) ui.linhaComando(l.slice(0, 200))
-      else if (mostradas === 30) ui.linhaComando("… (resto da saída omitido da tela; o agente recebe tudo)")
+      if (mostradas < 30) notificador().linhaComando(l.slice(0, 200))
+      else if (mostradas === 30) notificador().linhaComando("… (resto da saída omitido da tela; o agente recebe tudo)")
       mostradas++
     },
     undefined,

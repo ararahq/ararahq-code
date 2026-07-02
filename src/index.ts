@@ -8,8 +8,10 @@ import { garantirSintese, inicializarProjeto } from "./context/init"
 import { custoSessao, custoMes, mesAtual, historicoTarefas } from "./agent/custo"
 import { descobrirSkills } from "./skills/skills"
 import { carregarConfigGlobal, configurarChave } from "./config/env"
+import { configurarNotificador } from "./tools/notificador"
 
 carregarConfigGlobal()
+configurarNotificador(ui)
 
 const argsCli = process.argv.slice(2)
 const caminhosImagem: string[] = []

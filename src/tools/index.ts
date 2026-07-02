@@ -8,6 +8,7 @@ import { ui } from "../terminal/ui"
 import { pathSeguro, sanitizar } from "../security/sanitize"
 import { Backup } from "./backup"
 import { registrarFalha, resetRecovery, TETO_RECOVERY } from "../agent/recovery"
+import { resetBaseline } from "../agent/baseline"
 import {
   resetCamada4,
   escopoAtual,
@@ -68,6 +69,7 @@ export function novaRodada() {
   _contornoTentado = false
   resetRecovery()
   resetCamada4()
+  resetBaseline()
 }
 
 function contar(texto: string, alvo: string): number {

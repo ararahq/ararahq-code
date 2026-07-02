@@ -12,6 +12,12 @@ export function montarMensagemResultado(rel: RelatorioExecucao, prUrl: string | 
   if (rel.estado === "verde" && prUrl) {
     return `✅ Pronto — build verde. PR: ${prUrl}\n\n${rel.resposta.slice(0, 1200)}`
   }
+  if (rel.estado === "pre-existente" && prUrl) {
+    return `✅ Consertei o que pediu. O build ainda não fecha verde, mas só por falhas que JÁ existiam antes (não são da minha mudança). PR: ${prUrl}\n\n${rel.resposta.slice(0, 1200)}`
+  }
+  if (rel.estado === "indeterminado" && prUrl) {
+    return `⚠️ Corrigi a compilação. Sobraram testes falhando, mas o projeto não compilava antes — não sei dizer se já falhavam. Confere no PR: ${prUrl}\n\n${rel.resposta.slice(0, 1200)}`
+  }
   if (rel.estado === "sem-gate" && prUrl) {
     return `⚠️ Feito, mas sem build/teste pra validar — revise o PR com cuidado: ${prUrl}\n\n${rel.resposta.slice(0, 1200)}`
   }

@@ -18,6 +18,8 @@ export function derivarEstado(desfecho: Desfecho | null, editados: number): Esta
   if (editados === 0) return "sem-mudanca"
   if (desfecho.gate === "verde") return "verde"
   if (desfecho.gate === "vermelho") return "vermelho"
+  if (desfecho.gate === "pre-existente") return "pre-existente"
+  if (desfecho.gate === "indeterminado") return "indeterminado"
   return "sem-gate" // "ambiente" incluso: a mudança pode estar certa, mas não dá pra provar aqui
 }
 

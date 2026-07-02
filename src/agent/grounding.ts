@@ -45,7 +45,8 @@ export type DepsAterramento = {
 
 export type Aterramento =
   | { tipo: "ja-verde" }
-  | { tipo: "aterrado"; tarefa: string; arquivos: string[] }
+  // `saida`: a saída do build que FALHOU antes de qualquer edição — vira o baseline de falhas.
+  | { tipo: "aterrado"; tarefa: string; arquivos: string[]; saida: string }
 
 /**
  * Roda o gate UMA vez e aterra a tarefa nos locais do erro. Devolve:
@@ -68,5 +69,5 @@ export async function aterrarPorBuild(input: string, deps: DepsAterramento): Pro
     arquivos.add(rel)
     comTrecho.push({ arquivo: rel, linha: l.linha, trecho: await deps.lerTrecho(rel, l.linha) })
   }
-  return { tipo: "aterrado", tarefa: montarTarefaAterrada(input, comTrecho), arquivos: [...arquivos] }
+  return { tipo: "aterrado", tarefa: montarTarefaAterrada(input, comTrecho), arquivos: [...arquivos], saida }
 }

@@ -17,6 +17,7 @@ import { pareceSeguimento, pontuarDiff, type Modo } from "../engine/marques"
 import { pareceMultiPasso, planejar, ferramentasDaFase, type Passo } from "./planner"
 import { diagnosticarComFallback, reunirMaterial, gerarCandidatosDiagnostico } from "./diagnostico"
 import { pareceConsertarBuild, aterrarPorBuild } from "./grounding"
+import { registrarBaseline, baselineAtual, compararComBaseline, rotuloFalha } from "./baseline"
 import { selecionarPorVerificacao } from "./testtime"
 import { montarMapaAmplo, superficieDeArquivos } from "./contexto"
 import { criarResumirFn } from "../context/resumir"
@@ -149,7 +150,7 @@ const historico: Msg[] = []
 // Desfecho estruturado da última tarefa — o contrato do modo headless (executor autônomo lê isso
 // depois de processar() pra montar o relatório sem parsear texto). `gate` é o estado do portão de
 // build; null = a tarefa morreu em erro/abort antes de concluir.
-export type GateFinal = "verde" | "vermelho" | "ambiente" | "sem-gate"
+export type GateFinal = "verde" | "vermelho" | "ambiente" | "sem-gate" | "pre-existente" | "indeterminado"
 export type Desfecho = { resposta: string; gate: GateFinal }
 let _desfecho: Desfecho | null = null
 export function desfechoUltimaTarefa(): Desfecho | null {
@@ -328,8 +329,20 @@ function ultimaVerificouEFalhou(resposta: string): boolean {
 type ResultadoGate =
   | { estado: "sem-gate" }
   | { estado: "verde" }
-  | { estado: "vermelho" }
+  | { estado: "vermelho"; novas: string[] }
+  | { estado: "pre-existente"; preExistentes: string[] } // vermelho, mas SÓ por falhas que já existiam
+  | { estado: "indeterminado"; naoAtribuiveis: string[] } // baseline não compilava: não dá pra atribuir
   | { estado: "ambiente"; mensagem: string }
+
+/** Classifica um build vermelho contra o baseline: falha que já existia não é culpa da edição. */
+function classificarVermelho(saida: string): ResultadoGate {
+  const base = baselineAtual()
+  if (!base) return { estado: "vermelho", novas: [] } // sem baseline capturado: comportamento antigo
+  const v = compararComBaseline(base, saida)
+  if (v.tipo === "sem-piora") return { estado: "pre-existente", preExistentes: v.preExistentes.map(rotuloFalha) }
+  if (v.tipo === "indeterminado") return { estado: "indeterminado", naoAtribuiveis: v.naoAtribuiveis.map(rotuloFalha) }
+  return { estado: "vermelho", novas: v.novas.map(rotuloFalha) }
+}
 
 async function rodarTestGate(): Promise<ResultadoGate> {
   const editados = arquivosEditados()
@@ -350,9 +363,39 @@ async function rodarTestGate(): Promise<ResultadoGate> {
       return { estado: "ambiente", mensagem: amb.mensagem }
     }
     if (amb) return { estado: "ambiente", mensagem: amb.mensagem }
-    return { estado: "vermelho" }
+    return classificarVermelho(saida)
   }
   return { estado: "verde" }
+}
+
+/** Estado do desfecho a partir do resultado do portão. */
+function mapaGateFinal(gate: ResultadoGate): GateFinal {
+  switch (gate.estado) {
+    case "verde": return "verde"
+    case "ambiente": return "ambiente"
+    case "pre-existente": return "pre-existente"
+    case "indeterminado": return "indeterminado"
+    case "vermelho": return "vermelho"
+    default: return "sem-gate"
+  }
+}
+
+/** Sufixo honesto anexado à resposta conforme o veredito do portão. Vazio quando verde/sem-gate. */
+function sufixoGate(gate: ResultadoGate): string {
+  if (gate.estado === "ambiente") return `\n\n[Jade] ${gate.mensagem}`
+  if (gate.estado === "pre-existente")
+    return (
+      `\n\n[Jade] Consertei o que foi pedido. O build ainda não fecha verde, mas SÓ por falhas que ` +
+      `JÁ existiam antes de eu tocar (fora do escopo): ${gate.preExistentes.join(", ")}. Não introduzi nenhuma.`
+    )
+  if (gate.estado === "indeterminado")
+    return (
+      `\n\n[Jade] Corrigi a compilação. Os testes agora rodam e estes falham: ${gate.naoAtribuiveis.join(", ")}. ` +
+      `Como o projeto NÃO compilava antes da minha mudança, não dá pra afirmar se já falhavam — não os introduzi na compilação, mas confirma se são regressão ou dívida anterior.`
+    )
+  if (gate.estado === "vermelho")
+    return `\n\n[Jade] o build não fechou verde${gate.novas.length ? ` — falhas novas que preciso resolver: ${gate.novas.join(", ")}` : ""}. Não declaro pronto.`
+  return ""
 }
 
 /**
@@ -591,6 +634,9 @@ async function consertarBuildAterrado(
     return true
   }
 
+  // Baseline gate: as falhas do build ANTES de editar. Falha que persistir e já estava aqui não é
+  // culpa da Jade (o caso medido: o teste do controller já falhava pelo WIP do usuário).
+  registrarBaseline(at.saida)
   definirEscopo(escopoDeArquivos(at.arquivos))
   logInterno(`grounding-build: aterrado em [${at.arquivos.join(", ")}]`)
   ui.subItem(`erro apontado em: ${at.arquivos.join(", ")}`)
@@ -623,6 +669,8 @@ async function consertarBuildAterrado(
   }
 
   let gate = await rodarTestGate()
+  // Só tenta consertar se a edição introduziu falha NOVA (vermelho). Falha pré-existente não é da
+  // Jade — não fica martelando o que já estava quebrado antes de tocar.
   if (gate.estado === "vermelho") {
     const rFix = await executarPassada({
       model: openrouter(MODELOS.execucao) as Modelo,
@@ -646,15 +694,8 @@ async function consertarBuildAterrado(
     gate = await rodarTestGate()
   }
 
-  let gateFinal: GateFinal = "sem-gate"
-  if (gate.estado === "verde") gateFinal = "verde"
-  else if (gate.estado === "ambiente") {
-    gateFinal = "ambiente"
-    resposta = `${resposta}\n\n[Jade] ${gate.mensagem}`
-  } else if (gate.estado === "vermelho") {
-    gateFinal = "vermelho"
-    resposta = `${resposta}\n\n[Jade] o build ainda não fechou verde — não declaro pronto.`
-  }
+  const gateFinal = mapaGateFinal(gate)
+  resposta += sufixoGate(gate)
 
   const tty = Boolean(process.stdout.isTTY)
   if (resposta.trim()) {
@@ -1127,14 +1168,9 @@ export async function processar(input: string) {
   // (com instrução de só consertar, nada de edit novo). Determinístico: não depende do modelo lembrar.
   let gateFinal: GateFinal = "sem-gate"
   if (precisaTestGate(houveEdicao())) {
-    const g = await rodarTestGate()
-    if (g.estado === "verde") {
-      gateFinal = "verde"
-    } else if (g.estado === "ambiente") {
-      gateFinal = "ambiente"
-      respostaFinal = `${respostaFinal}\n\n[Jade] ${g.mensagem}`
-    } else if (g.estado === "vermelho") {
-      gateFinal = "vermelho"
+    let g = await rodarTestGate()
+    // Só conserta se a edição introduziu falha NOVA. Pré-existente (baseline) não é culpa da Jade.
+    if (g.estado === "vermelho") {
       ui.aviso("build vermelho após a edição — consertando antes de fechar.")
       const rGate = await executarPassada({
         model: openrouter(modeloAtual) as Modelo,
@@ -1160,16 +1196,10 @@ export async function processar(input: string) {
         historico.pop()
         return
       }
-      const g2 = await rodarTestGate()
-      if (g2.estado === "verde") {
-        gateFinal = "verde"
-      } else if (g2.estado === "vermelho") {
-        respostaFinal = `${respostaFinal}\n\n[Jade] o build ainda não está verde — não declaro pronto. ${INSTRUCAO_TRAJETORIA_LONGA}`
-      } else if (g2.estado === "ambiente") {
-        gateFinal = "ambiente"
-        respostaFinal = `${respostaFinal}\n\n[Jade] ${g2.mensagem}`
-      }
+      g = await rodarTestGate()
     }
+    gateFinal = mapaGateFinal(g)
+    respostaFinal += sufixoGate(g)
   }
 
   // 1.5 — fix de diagnóstico verificado (build verde): registra o bug resolvido na memória do projeto

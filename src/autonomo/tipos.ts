@@ -25,10 +25,13 @@ export type TarefaNormalizada = {
 }
 
 // verde: editou e o build/teste do subprojeto fechou. sem-gate: editou mas não havia gate
-// determinável (ou era tarefa de leitura). vermelho: editou e o build NÃO fechou — não vira PR
-// como se estivesse pronto. sem-mudanca: concluiu sem editar (resposta/diagnóstico honesto).
-// erro: a execução morreu antes de concluir.
-export type EstadoExecucao = "verde" | "sem-gate" | "vermelho" | "sem-mudanca" | "erro"
+// determinável (ou era tarefa de leitura). vermelho: editou e o build NÃO fechou por falha NOVA que a
+// edição introduziu — não vira PR como se estivesse pronto. pre-existente: editou, a mudança pedida
+// está aplicada, mas o build segue vermelho SÓ por falhas que já existiam antes (não é culpa da
+// edição) — vira PR com ressalva. sem-mudanca: concluiu sem editar. erro: morreu antes de concluir.
+// indeterminado: corrigiu a compilação, mas o baseline não compilava — há testes falhando que não dá
+// pra atribuir (regressão vs dívida anterior). Vira PR com ressalva honesta pedindo confirmação.
+export type EstadoExecucao = "verde" | "sem-gate" | "vermelho" | "pre-existente" | "indeterminado" | "sem-mudanca" | "erro"
 
 export type RelatorioExecucao = {
   estado: EstadoExecucao

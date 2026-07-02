@@ -139,7 +139,12 @@ export function criarHandler(fila: Fila, env: Env = process.env) {
         if (!tarefa) return json(404, { error: { code: "TAREFA_NAO_ENCONTRADA", message: `tarefa ${body.tarefaId}` } })
         const relatorio = body.relatorio as unknown as RelatorioExecucao
         const prUrl = ehString(body.prUrl) ? body.prUrl : null
-        const sucesso = relatorio.estado === "verde" || relatorio.estado === "sem-gate" || relatorio.estado === "sem-mudanca"
+        const sucesso =
+          relatorio.estado === "verde" ||
+          relatorio.estado === "pre-existente" ||
+          relatorio.estado === "indeterminado" ||
+          relatorio.estado === "sem-gate" ||
+          relatorio.estado === "sem-mudanca"
         fila.concluir(tarefa.id, sucesso ? "concluida" : "falhou", JSON.stringify({ estado: relatorio.estado, prUrl }))
         await responderNaOrigem(tarefa.resposta, montarMensagemResultado(relatorio, prUrl), env)
         return json(200, { ok: true })

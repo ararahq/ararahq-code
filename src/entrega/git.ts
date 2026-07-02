@@ -44,9 +44,13 @@ export function corpoPR(instrucao: string, rel: RelatorioExecucao): string {
   const aviso =
     rel.estado === "verde"
       ? "Build/teste do subprojeto tocado fechou **verde** antes deste PR."
-      : rel.estado === "sem-gate"
-        ? "**Atenção:** não havia build/teste determinável pra validar esta mudança — revise com mais cuidado."
-        : "**Atenção:** o build NÃO fechou verde. Este PR é um progresso parcial honesto, não um pronto."
+      : rel.estado === "pre-existente"
+        ? "A mudança pedida está aplicada. O build ainda não fecha verde, mas **só por falhas que já existiam antes** desta mudança — ela não introduziu nenhuma regressão."
+        : rel.estado === "indeterminado"
+          ? "A compilação foi corrigida. Há testes falhando, mas o projeto **não compilava antes** desta mudança — não dá pra afirmar se são regressão ou dívida anterior. **Revise:** confirme se essas falhas já existiam."
+          : rel.estado === "sem-gate"
+          ? "**Atenção:** não havia build/teste determinável pra validar esta mudança — revise com mais cuidado."
+          : "**Atenção:** o build NÃO fechou verde por uma falha nova. Este PR é um progresso parcial honesto, não um pronto."
   return [
     `## Tarefa`,
     instrucao.trim(),

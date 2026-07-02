@@ -6,6 +6,7 @@ import {
   contradizEdicaoAnterior,
   escopoDoDiagnostico,
   dentroDoEscopo,
+  contornoAmbiente,
 } from "./camada4"
 
 beforeEach(() => resetCamada4())
@@ -48,5 +49,18 @@ describe("3.7 — escopoDoDiagnostico agnóstico (regressão)", () => {
     expect(dentroDoEscopo(escopo, "scripts/deploy.sh")).toBe(true)
     expect(dentroDoEscopo(escopo, "lib/helper.rb")).toBe(true)
     expect(dentroDoEscopo(escopo, "outro.ts")).toBe(false)
+  })
+})
+
+describe("contornoAmbiente — JDK novo demais pro plugin Kotlin", () => {
+  test("gradle que imprime só a versão após 'What went wrong' é AMBIENTE com contorno de JAVA_HOME", () => {
+    const saida = "FAILURE: Build failed with an exception.\n\n* What went wrong:\n25.0.1\n\n* Try:\n> Run with --stacktrace"
+    const acao = contornoAmbiente("./gradlew build", saida)
+    expect(acao).not.toBeNull()
+    expect(acao?.reexecutar).toContain("JAVA_HOME")
+  })
+
+  test("mensagem parecida em comando não-JVM não vira ambiente", () => {
+    expect(contornoAmbiente("bun test", "* What went wrong:\n25.0.1")).toBeNull()
   })
 })

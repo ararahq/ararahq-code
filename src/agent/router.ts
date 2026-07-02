@@ -18,7 +18,7 @@ export const MODELOS = {
 } as const
 
 export const CUSTO: Record<string, { in: number; out: number }> = {
-  "deepseek/deepseek-v4-flash": { in: 0.0983, out: 0.1966 },
+  "deepseek/deepseek-v4-flash": { in: 0.089, out: 0.18 },
   "deepseek/deepseek-v4-pro": { in: 0.435, out: 0.87 },
   "google/gemini-3.1-pro-preview": { in: 2.0, out: 12.0 },
   "openai/gpt-5.5": { in: 5.0, out: 30.0 },

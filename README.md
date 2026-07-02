@@ -82,10 +82,10 @@ Cada marcha é um modelo diferente, roteado pela Camada 3 — e isso é **aberto
 | Marcha | Quando | Motor (hoje) | Custo (USD / 1M in·out) |
 |---|---|---|---|
 | **M1 — trivial** | conversa, meta-pergunta | Ollama local (sem ele, cai no v4-flash) | ~0 (local) |
-| **M2 — execução** | instrução cirúrgica pronta | deepseek-v4-flash | 0.10 · 0.20 |
+| **M2 — execução** | instrução cirúrgica pronta | deepseek-v4-flash | 0.09 · 0.18 |
 | **M3 — diagnóstico** | sintoma sem causa, stack trace | deepseek-v4-pro | 0.44 · 0.87 |
 | **M4 — loop longo** | escopo amplo, multi-arquivo | kimi-k2.6 (via Maestro: v4-pro planeja, v4-flash executa) | 0.68 · 3.42 |
-| **M5 — executar diagnóstico** | aplicar o mastigado da M3 | volta pra M2 | 0.10 · 0.20 |
+| **M5 — executar diagnóstico** | aplicar o mastigado da M3 | volta pra M2 | 0.09 · 0.18 |
 
 **Cadeia de escalada do diagnóstico** — só sobe se o degrau de baixo não cravar (`arquivo:linha`, sem hedge), sempre sobre o **mesmo material** já reunido:
 

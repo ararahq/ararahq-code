@@ -1,14 +1,27 @@
 {
-  "name": "ararahq-code",
+  "name": "jade-code",
   "version": "0.1.35",
+  "description": "Jade Code — terminal coding agent. The architecture is the product, not the model. Bring your own OpenRouter key.",
+  "license": "Apache-2.0",
+  "author": "Micael Marques (https://github.com/micaelmrsilva)",
+  "homepage": "https://github.com/ararahq/ararahq-code#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ararahq/ararahq-code.git"
+  },
+  "bugs": {
+    "url": "https://github.com/ararahq/ararahq-code/issues"
+  },
   "type": "module",
   "bin": {
-    "arara": "./src/index.ts"
+    "jade-code": "./src/index.ts"
   },
   "scripts": {
     "start": "bun run src/index.ts",
-    "build": "bun build src/index.ts --compile --outfile arara",
-    "eval": "bun run eval/rodar.ts",
+    "build": "bun build src/index.ts --compile --outfile jade-code",
+    "gateway": "bun run src/gateway/servidor.ts",
+    "despachante": "bun run src/orquestrador/despachante.ts",
+    "sandbox:build": "docker build -f infra/sandbox/Dockerfile -t jade-sandbox .",
     "test": "bun test",
     "typecheck": "tsc --noEmit"
   },

@@ -16,11 +16,12 @@ import {
 import { pareceSeguimento, pontuarDiff, type Modo } from "../engine/marques"
 import { pareceMultiPasso, planejar, ferramentasDaFase, type Passo } from "./planner"
 import { diagnosticarComFallback, reunirMaterial, gerarCandidatosDiagnostico } from "./diagnostico"
-import { pareceConsertarBuild, aterrarPorBuild } from "./grounding"
+import { pareceConsertarBuild, pareceConsertarDepreciacao, aterrarPorBuild } from "./grounding"
 import { ancorarAlvo, notaAncoragem, pareceBugDeSintoma, diagnosticoAncoraNoAlvo, montarRespostaForaDoAlvo, type AlvoAncorado } from "./alvo"
 import { listarFontes } from "../conhecimento/walk"
 import { registrarBaseline, baselineAtual, compararComBaseline, rotuloFalha } from "./baseline"
 import { anexarImagens, type ParteImagem } from "./imagem"
+import { extrairDepreciacoes, montarTarefaFamilia, rotuloFamilia, contarUsosRestantes, relatorioDepreciacoes, type ResultadoFamilia } from "./depreciacao"
 import { selecionarPorVerificacao } from "./testtime"
 import { montarMapaAmplo, superficieDeArquivos } from "./contexto"
 import { criarResumirFn } from "../context/resumir"
@@ -29,7 +30,7 @@ import { escaladaPendente, estourouTeto, consumirEscalada, podeTrocarMarcha, reg
 import { registrarTarefa } from "./custo"
 import { ferramentas, novaRodada, rodar } from "../tools"
 import { carregarContexto } from "../context/projeto"
-import { carregarIndice, registrarBug, montarRegistroBug, buscarPrecedente } from "../conhecimento"
+import { carregarIndice, indexar, registrarBug, montarRegistroBug, buscarPrecedente } from "../conhecimento"
 import {
   escopoDoDiagnostico,
   escopoDeArquivos,
@@ -43,6 +44,7 @@ import {
   montarGate,
   comandosDoGate,
   INSTRUCAO_GATE_VERMELHO,
+  INSTRUCAO_RELATORIO_CORTE,
   trajetoriaLonga,
   INSTRUCAO_TRAJETORIA_LONGA,
   contornoAmbiente,
@@ -217,6 +219,7 @@ type ResultadoPassada = {
   resposta: string
   inTok: number
   outTok: number
+  passos: number
   abortado: boolean
   erro: unknown
 }
@@ -229,10 +232,11 @@ type ConfigPassada = {
   thinking: boolean
   passoRef: { atual: number }
   extra?: Msg[]
+  semFerramentas?: boolean
 }
 
 async function executarPassada(cfg: ConfigPassada): Promise<ResultadoPassada> {
-  const { model, sistema, toolset, plano, thinking, passoRef, extra } = cfg
+  const { model, sistema, toolset, plano, thinking, passoRef, extra, semFerramentas } = cfg
   let erroCapturado: unknown = null
 
   const ac = new AbortController()
@@ -242,8 +246,8 @@ async function executarPassada(cfg: ConfigPassada): Promise<ResultadoPassada> {
     model,
     system: sistema,
     messages: mensagens,
-    tools: toolset,
-    stopWhen: stepCountIs(MAX_ITERACOES),
+    tools: semFerramentas ? undefined : toolset,
+    stopWhen: stepCountIs(semFerramentas ? 1 : MAX_ITERACOES),
     temperature: 0.3,
     abortSignal: ac.signal,
     providerOptions: thinking ? { openrouter: { reasoning: { effort: "medium" } } } : undefined,
@@ -294,7 +298,11 @@ async function executarPassada(cfg: ConfigPassada): Promise<ResultadoPassada> {
   _abort = null
 
   const { inTok, outTok } = await extrairUso(result.usage)
-  return { resposta, inTok, outTok, abortado, erro: erroCapturado }
+  let passos = 0
+  try {
+    passos = (await result.steps).length
+  } catch {}
+  return { resposta, inTok, outTok, passos, abortado, erro: erroCapturado }
 }
 
 function fazerConcluirPasso(plano: Passo[], passoRef: { atual: number }) {
@@ -606,6 +614,134 @@ async function lerTrecho(arquivo: string, linha: number): Promise<string | null>
   } catch {
     return null
   }
+}
+
+async function indexarSeguro() {
+  try {
+    return await indexar(process.cwd())
+  } catch {
+    return null
+  }
+}
+
+async function rodarBuildComContorno(comando: string, signal?: AbortSignal): Promise<{ code: number; saida: string }> {
+  let r = await rodar(comando, (l) => ui.linhaComando(l.slice(0, 200)), undefined, signal)
+  if (r.code !== 0) {
+    const amb = contornoAmbiente(comando, r.saida)
+    if (amb?.reexecutar) {
+      ui.linhaComando("ambiente: runtime incompatível — aplicando contorno…")
+      r = await rodar(amb.reexecutar, (l) => ui.linhaComando(l.slice(0, 200)), undefined, signal)
+    }
+  }
+  return { code: r.code, saida: r.saida }
+}
+
+async function consertarDepreciacoesAterrado(
+  input: string,
+  openrouter: ProvedorLLM,
+  ctx: { completo: string },
+  skills = "",
+): Promise<boolean> {
+  if (!pareceConsertarDepreciacao(input)) return false
+  const indice = (await carregarIndice(process.cwd())) ?? (await indexarSeguro())
+  const comando = indice?.project.buildCmd ?? indice?.project.testCmd ?? null
+  if (!comando) return false
+
+  const inicio = Date.now()
+  const acP = new AbortController()
+  _abort = acP
+  ui.spinnerStart("Jade rodando o build pra mapear o que está depreciado")
+  const rBuild = await rodarBuildComContorno(comando, acP.signal)
+  ui.spinnerStop()
+  _abort = null
+  if (acP.signal.aborted) {
+    finalizarAbort()
+    return true
+  }
+  if (rBuild.code !== 0) return false
+
+  const familias = extrairDepreciacoes(rBuild.saida, process.cwd())
+  if (!familias.length) {
+    const msg = "[Jade] rodei o build do projeto: VERDE e sem nenhum aviso de depreciação na saída — não encontrei o que corrigir por aqui."
+    ui.linhaBranca()
+    ui.resposta(msg)
+    ui.linhaBranca()
+    historico.push({ role: "user", content: input })
+    historico.push({ role: "assistant", content: msg })
+    registrarDesfecho(msg, "verde")
+    ui.metricas(0, 0, Date.now() - inicio)
+    await registrarTarefa({ modo: "execucao", modelo: "gate-only", thinking: false, tokens: 0, custoUSD: 0, ms: Date.now() - inicio })
+    return true
+  }
+
+  registrarBaseline(rBuild.saida)
+  const totalPontos = familias.reduce((soma, f) => soma + f.locais.length, 0)
+  const totalArquivos = new Set(familias.flatMap((f) => f.arquivos)).size
+  logInterno(`depreciacoes: ${familias.length} familias, ${totalPontos} pontos, ${totalArquivos} arquivos`)
+  ui.aviso(`o build revelou ${totalPontos} uso(s) depreciado(s) em ${totalArquivos} arquivo(s) — atacando em ${familias.length} frente(s).`)
+  ui.plano(familias.map((f) => `${rotuloFamilia(f)} — ${f.locais.length} ponto(s) em ${f.arquivos.length} arquivo(s)`))
+
+  const sistema = montarSistema(ctx.completo, "", "", skills)
+  historico.push({ role: "user", content: input })
+  let totalIn = 0
+  let totalOut = 0
+  const resultados: ResultadoFamilia[] = []
+
+  for (let i = 0; i < familias.length; i++) {
+    const familia = familias[i]
+    ui.jade(`frente ${i + 1}/${familias.length} — ${rotuloFamilia(familia)}`)
+    definirEscopo(escopoDeArquivos(familia.arquivos))
+    const rF = await executarPassada({
+      model: openrouter(MODELOS.execucao) as Modelo,
+      sistema,
+      toolset: ferramentas,
+      plano: [],
+      thinking: false,
+      passoRef: { atual: 0 },
+      extra: [{ role: "user" as const, content: montarTarefaFamilia(familia) }],
+    })
+    totalIn += rF.inTok
+    totalOut += rF.outTok
+    if (rF.abortado) {
+      finalizarAbort()
+      return true
+    }
+    if (rF.erro) {
+      resultados.push({ familia, estado: "erro", restantes: null })
+      continue
+    }
+    const conserto = await rodarGateComConserto(
+      { model: openrouter(MODELOS.execucao) as Modelo, sistema, toolset: ferramentas, plano: [], passoRef: { atual: 0 } },
+      rF.resposta,
+    )
+    totalIn += conserto.inTok
+    totalOut += conserto.outTok
+    if (conserto.abortado) {
+      finalizarAbort()
+      return true
+    }
+    const restantes = await contarUsosRestantes(familia, lerTextoFonte)
+    resultados.push({ familia, estado: conserto.gate.estado, restantes })
+  }
+
+  const resposta = relatorioDepreciacoes(resultados)
+  const tudoVerde = resultados.every((r) => r.estado === "verde" || r.estado === "sem-gate")
+  ui.linhaBranca()
+  ui.resposta(resposta)
+  ui.linhaBranca()
+  historico.push({ role: "assistant", content: resposta })
+  registrarDesfecho(resposta, tudoVerde ? "verde" : "vermelho")
+  const custo = custoUSD(MODELOS.execucao, totalIn, totalOut)
+  ui.metricas(totalIn + totalOut, custo, Date.now() - inicio)
+  await registrarTarefa({
+    modo: "execucao",
+    modelo: `depreciacoes→${MODELOS.execucao}`,
+    thinking: false,
+    tokens: totalIn + totalOut,
+    custoUSD: custo,
+    ms: Date.now() - inicio,
+  })
+  return true
 }
 
 async function consertarBuildAterrado(
@@ -1088,6 +1224,8 @@ export async function processar(input: string, imagens: ParteImagem[] = []) {
   }
 
   if (!heranca) {
+    const tratadoDep = await consertarDepreciacoesAterrado(input, openrouter, ctx, blocoSkills)
+    if (tratadoDep) return
     const tratado = await consertarBuildAterrado(input, openrouter, ctx, blocoSkills)
     if (tratado) return
   }
@@ -1164,6 +1302,30 @@ export async function processar(input: string, imagens: ParteImagem[] = []) {
     ui.erro(msgErro(r1.erro))
     historico.pop()
     return
+  }
+
+  if (r1.passos >= MAX_ITERACOES) {
+    logInterno(`teto de passos atingido (${r1.passos}) — forçando relatório final`)
+    const rRel = await executarPassada({
+      model: openrouter(modeloAtual) as Modelo,
+      sistema,
+      toolset,
+      plano,
+      thinking: false,
+      passoRef,
+      semFerramentas: true,
+      extra: [
+        ...(respostaFinal.trim() ? [{ role: "assistant" as const, content: respostaFinal }] : []),
+        { role: "user" as const, content: INSTRUCAO_RELATORIO_CORTE },
+      ],
+    })
+    totalIn += rRel.inTok
+    totalOut += rRel.outTok
+    if (rRel.abortado) {
+      finalizarAbort()
+      return
+    }
+    if (!rRel.erro && rRel.resposta.trim()) respostaFinal = rRel.resposta
   }
 
   if (deveReclassificarPraDiagnostico(modo, houveEdicao(), respostaFinal) && podeTrocarMarcha()) {

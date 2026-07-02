@@ -267,3 +267,8 @@ export function trajetoriaLonga(passos: number, verde: boolean): boolean {
 export const INSTRUCAO_TRAJETORIA_LONGA =
   "Você já deu muitos passos sem fechar com build verde. PARE de empilhar mudança. " +
   "Resuma ao usuário o que JÁ fez, o que ainda falta e onde travou (com arquivo:linha). Não rode até o teto cego."
+
+export const INSTRUCAO_RELATORIO_CORTE =
+  "O orçamento de passos desta tarefa acabou e você não concluiu. NÃO use nenhuma ferramenta. " +
+  "Escreva AGORA o relatório final pro usuário, direto e sem narração de processo: " +
+  "(1) o que você DESCOBRIU (com arquivo:linha), (2) o que chegou a FAZER, (3) o que FALTA e como continuar."

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { pareceConsertarBuild, montarTarefaAterrada, aterrarPorBuild } from "./grounding"
+import { pareceConsertarBuild, pareceConsertarDepreciacao, montarTarefaAterrada, aterrarPorBuild } from "./grounding"
 
 describe("pareceConsertarBuild", () => {
   test("casa 'faça os testes passarem' e variantes", () => {
@@ -72,5 +72,20 @@ describe("aterrarPorBuild", () => {
   test("sem comando de gate determinável → null", async () => {
     const r = await aterrarPorBuild("faz os testes passar", { ...deps(1, "x"), comando: null })
     expect(r).toBeNull()
+  })
+})
+
+describe("pareceConsertarDepreciacao", () => {
+  test("casa conserto de depreciação/warnings", () => {
+    expect(pareceConsertarDepreciacao("corrige tudo que está depreciado no build do projeto")).toBe(true)
+    expect(pareceConsertarDepreciacao("arruma os warnings de deprecated do gradle")).toBe(true)
+    expect(pareceConsertarDepreciacao("fix all deprecation warnings")).toBe(true)
+    expect(pareceConsertarDepreciacao("limpa os avisos do build")).toBe(false)
+  })
+
+  test("NÃO casa pergunta nem tarefa sem ação de conserto", () => {
+    expect(pareceConsertarDepreciacao("o que está deprecated no projeto?")).toBe(false)
+    expect(pareceConsertarDepreciacao("faça os testes passarem")).toBe(false)
+    expect(pareceConsertarDepreciacao("adiciona o campo isActive no User")).toBe(false)
   })
 })

@@ -7,6 +7,12 @@ export function pareceConsertarBuild(input: string): boolean {
   return RE_ALVO.test(input) && RE_ACAO.test(input)
 }
 
+const RE_DEPRECIACAO = /\bdeprecia\w*|\bdeprecat\w*|\bwarning\w*|\bavisos?\b|\bobsolet\w*/i
+
+export function pareceConsertarDepreciacao(input: string): boolean {
+  return RE_DEPRECIACAO.test(input) && RE_ACAO.test(input)
+}
+
 export type LocalTrecho = { arquivo: string; linha: number; trecho: string | null }
 
 export function montarTarefaAterrada(input: string, locais: LocalTrecho[]): string {

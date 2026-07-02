@@ -9,6 +9,22 @@ export type FamiliaDepreciacao = {
 const RE_KOTLIN = /^w: (?:file:\/\/)?(.+?):(\d+):\d+\s+'(.+)' is deprecated\.?\s*(.*)$/
 const RE_JAVAC = /^(.+?\.java):(\d+): warning: \[(?:deprecation|removal)\] (.+)$/
 
+export function comandoWarnings(buildSystem: string, buildCmd: string): string {
+  const wrapper = buildCmd.trim().split(/\s+/)[0]
+  switch (buildSystem) {
+    case "gradle":
+      return `${wrapper} classes testClasses --rerun-tasks --console=plain`
+    case "maven":
+      return `${wrapper} -q clean compile test-compile`
+    case "cargo":
+      return "cargo build --tests"
+    case "go":
+      return "go build ./..."
+    default:
+      return buildCmd
+  }
+}
+
 const MAX_FAMILIAS = 12
 
 export function extrairDepreciacoes(saida: string, raiz: string): FamiliaDepreciacao[] {
@@ -93,17 +109,25 @@ export type ResultadoFamilia = {
   restantes: number | null
 }
 
-export function relatorioDepreciacoes(resultados: ResultadoFamilia[]): string {
+export function relatorioDepreciacoes(resultados: ResultadoFamilia[], compilou: boolean): string {
   const linhas = resultados.map((r) => {
     const rotulo = rotuloFamilia(r.familia)
     const alvo = `${r.familia.locais.length} ponto(s) em ${r.familia.arquivos.length} arquivo(s)`
-    const sobra =
-      r.restantes === null ? "" : r.restantes === 0 ? " · 0 usos restantes" : ` · ⚠ ${r.restantes} uso(s) ainda no código`
-    return `- ${rotulo} (${alvo}): build ${r.estado}${sobra}`
+    const status =
+      r.estado === "erro"
+        ? "não consegui editar"
+        : r.restantes === null
+          ? "editado"
+          : r.restantes === 0
+            ? "substituído (0 usos restantes)"
+            : `⚠ ${r.restantes} uso(s) ainda no código`
+    return `- ${rotulo} (${alvo}): ${status}`
   })
-  const tudoLimpo = resultados.every((r) => r.estado === "verde" && r.restantes === 0)
-  const fecho = tudoLimpo
-    ? "Todas as depreciações mapeadas foram substituídas e o build fechou verde."
-    : "Nem tudo fechou limpo — os itens marcados acima dizem exatamente o que sobrou."
-  return `Corrigi as depreciações apontadas pelo build, família por família:\n\n${linhas.join("\n")}\n\n${fecho}`
+  const tudoLimpo = compilou && resultados.every((r) => r.restantes === 0)
+  const fecho = !compilou
+    ? "⚠ Depois das substituições o projeto NÃO compila — revise antes de usar (pode ser um substituto com assinatura diferente)."
+    : tudoLimpo
+      ? "Todas as depreciações mapeadas foram substituídas e o projeto compila."
+      : "O projeto compila, mas os itens marcados com ⚠ ainda têm usos do símbolo depreciado — precisam de uma segunda passada."
+  return `Corrigi as depreciações que a compilação apontou, família por família:\n\n${linhas.join("\n")}\n\n${fecho}`
 }

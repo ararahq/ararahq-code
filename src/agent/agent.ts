@@ -21,7 +21,7 @@ import { ancorarAlvo, notaAncoragem, pareceBugDeSintoma, diagnosticoAncoraNoAlvo
 import { listarFontes } from "../conhecimento/walk"
 import { registrarBaseline, baselineAtual, compararComBaseline, rotuloFalha } from "./baseline"
 import { anexarImagens, type ParteImagem } from "./imagem"
-import { extrairDepreciacoes, montarTarefaFamilia, rotuloFamilia, contarUsosRestantes, relatorioDepreciacoes, type ResultadoFamilia } from "./depreciacao"
+import { extrairDepreciacoes, comandoWarnings, montarTarefaFamilia, rotuloFamilia, contarUsosRestantes, relatorioDepreciacoes, type ResultadoFamilia } from "./depreciacao"
 import { selecionarPorVerificacao } from "./testtime"
 import { montarMapaAmplo, superficieDeArquivos } from "./contexto"
 import { criarResumirFn } from "../context/resumir"
@@ -644,13 +644,16 @@ async function consertarDepreciacoesAterrado(
 ): Promise<boolean> {
   if (!pareceConsertarDepreciacao(input)) return false
   const indice = (await carregarIndice(process.cwd())) ?? (await indexarSeguro())
-  const comando = indice?.project.buildCmd ?? indice?.project.testCmd ?? null
-  if (!comando) return false
+  if (!indice) return false
+  const buildCmd = indice.project.buildCmd ?? indice.project.testCmd ?? null
+  if (!buildCmd) return false
+  const buildSystem = indice.project.subprojetos.find((s) => s.buildCmd)?.buildSystem ?? ""
+  const comando = comandoWarnings(buildSystem, buildCmd)
 
   const inicio = Date.now()
   const acP = new AbortController()
   _abort = acP
-  ui.spinnerStart("Jade rodando o build pra mapear o que está depreciado")
+  ui.spinnerStart("Jade compilando o projeto pra mapear o que está depreciado")
   const rBuild = await rodarBuildComContorno(comando, acP.signal)
   ui.spinnerStop()
   _abort = null
@@ -658,11 +661,11 @@ async function consertarDepreciacoesAterrado(
     finalizarAbort()
     return true
   }
-  if (rBuild.code !== 0) return false
 
   const familias = extrairDepreciacoes(rBuild.saida, process.cwd())
   if (!familias.length) {
-    const msg = "[Jade] rodei o build do projeto: VERDE e sem nenhum aviso de depreciação na saída — não encontrei o que corrigir por aqui."
+    if (rBuild.code !== 0) return false
+    const msg = "[Jade] compilei o projeto: VERDE e sem nenhum aviso de depreciação na saída — não encontrei o que corrigir por aqui."
     ui.linhaBranca()
     ui.resposta(msg)
     ui.linhaBranca()
@@ -706,26 +709,21 @@ async function consertarDepreciacoesAterrado(
       finalizarAbort()
       return true
     }
-    if (rF.erro) {
-      resultados.push({ familia, estado: "erro", restantes: null })
-      continue
-    }
-    const conserto = await rodarGateComConserto(
-      { model: openrouter(MODELOS.execucao) as Modelo, sistema, toolset: ferramentas, plano: [], passoRef: { atual: 0 } },
-      rF.resposta,
-    )
-    totalIn += conserto.inTok
-    totalOut += conserto.outTok
-    if (conserto.abortado) {
-      finalizarAbort()
-      return true
-    }
-    const restantes = await contarUsosRestantes(familia, lerTextoFonte)
-    resultados.push({ familia, estado: conserto.gate.estado, restantes })
+    resultados.push({ familia, estado: rF.erro ? "erro" : "editado", restantes: null })
   }
 
-  const resposta = relatorioDepreciacoes(resultados)
-  const tudoVerde = resultados.every((r) => r.estado === "verde" || r.estado === "sem-gate")
+  ui.spinnerStart("Jade recompilando pra confirmar as substituições")
+  const rVerif = await rodarBuildComContorno(comando)
+  ui.spinnerStop()
+  const compilou = rVerif.code === 0
+  for (const r of resultados) {
+    if (r.estado === "erro") continue
+    r.restantes = await contarUsosRestantes(r.familia, lerTextoFonte)
+    r.estado = compilou ? "compila" : "compila-falhou"
+  }
+
+  const resposta = relatorioDepreciacoes(resultados, compilou)
+  const tudoVerde = compilou && resultados.every((r) => r.restantes === 0)
   ui.linhaBranca()
   ui.resposta(resposta)
   ui.linhaBranca()

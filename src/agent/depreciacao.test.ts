@@ -6,6 +6,7 @@ import {
   montarTarefaFamilia,
   contarUsosRestantes,
   relatorioDepreciacoes,
+  comandoWarnings,
 } from "./depreciacao"
 
 const RAIZ = "/repo"
@@ -94,18 +95,43 @@ describe("contarUsosRestantes", () => {
 })
 
 describe("relatorioDepreciacoes", () => {
-  test("tudo verde e zerado fecha com sucesso; sobra vira alerta explícito", () => {
-    const [calc, fields] = extrairDepreciacoes(SAIDA_KOTLIN, RAIZ)
-    const limpo = relatorioDepreciacoes([{ familia: calc, estado: "verde", restantes: 0 }])
-    expect(limpo).toContain("calculatePrice")
-    expect(limpo).toContain("build verde")
-    expect(limpo).toContain("fechou verde")
+  const [calc, fields] = extrairDepreciacoes(SAIDA_KOTLIN, RAIZ)
 
-    const sujo = relatorioDepreciacoes([
-      { familia: calc, estado: "verde", restantes: 0 },
-      { familia: fields, estado: "vermelho", restantes: 2 },
-    ])
+  test("tudo substituído e compilando fecha com sucesso", () => {
+    const limpo = relatorioDepreciacoes([{ familia: calc, estado: "compila", restantes: 0 }], true)
+    expect(limpo).toContain("calculatePrice")
+    expect(limpo).toContain("substituído (0 usos restantes)")
+    expect(limpo).toContain("compila")
+  })
+
+  test("sobra de uso vira alerta explícito pedindo 2ª passada", () => {
+    const sujo = relatorioDepreciacoes(
+      [
+        { familia: calc, estado: "compila", restantes: 0 },
+        { familia: fields, estado: "compila", restantes: 2 },
+      ],
+      true,
+    )
     expect(sujo).toContain("⚠ 2 uso(s) ainda no código")
-    expect(sujo).toContain("Nem tudo fechou limpo")
+    expect(sujo).toContain("segunda passada")
+  })
+
+  test("compilação quebrada após substituir é dito na cara", () => {
+    const quebrou = relatorioDepreciacoes([{ familia: calc, estado: "compila-falhou", restantes: 0 }], false)
+    expect(quebrou).toContain("NÃO compila")
+  })
+})
+
+describe("comandoWarnings", () => {
+  test("gradle: força recompilação com warnings (classes+testClasses, rerun)", () => {
+    const c = comandoWarnings("gradle", "./gradlew build")
+    expect(c).toContain("./gradlew")
+    expect(c).toContain("--rerun-tasks")
+    expect(c).not.toContain(" build")
+  })
+
+  test("maven compila sem empacotar; ecossistema desconhecido cai no buildCmd", () => {
+    expect(comandoWarnings("maven", "./mvnw -q package")).toContain("test-compile")
+    expect(comandoWarnings("desconhecido", "make all")).toBe("make all")
   })
 })

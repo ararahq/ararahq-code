@@ -1,7 +1,9 @@
 import { tool } from "ai"
 import { z } from "zod"
 import { readdir } from "node:fs/promises"
+import { existsSync } from "node:fs"
 import { spawn } from "node:child_process"
+import { dicaLocaisErro } from "../agent/erros"
 import { ui } from "../terminal/ui"
 import { pathSeguro, sanitizar } from "../security/sanitize"
 import { Backup } from "./backup"
@@ -98,7 +100,7 @@ async function arvore(dir: string, prefixo: string, prof: number, acc: string[],
 const TIMEOUT_PADRAO = 180_000
 const TIMEOUT_LONGO = 600_000
 const GRACA_KILL = 3_000
-const COMANDOS_LONGOS = /\b(gradlew|gradle|mvn|maven|cargo|go\s+(build|test)|(npm|yarn|pnpm|bun)\s+(run\s+)?(build|test|ci))\b/
+const COMANDOS_LONGOS = /\b(gradlew|gradle|mvn|maven|cargo|make|cmake|ctest|go\s+(build|test)|(npm|yarn|pnpm|bun)\s+(run\s+)?(build|test|ci))\b/
 
 function timeoutDe(comando: string): number {
   return COMANDOS_LONGOS.test(comando) ? TIMEOUT_LONGO : TIMEOUT_PADRAO
@@ -195,7 +197,7 @@ const RG_GLOBS = [
 ].join(" ")
 const GREP_EXCLUI_ARQ = ARQUIVOS_RUIDO.map((a) => `--exclude='${a}'`).join(" ")
 // Pro dossiê de diagnóstico: só código-fonte de verdade, sem teste/lock/json/bundle.
-const FONTE_EXTS = ["kt", "kts", "ts", "tsx", "js", "jsx", "java", "py", "go", "rs", "php", "rb"]
+const FONTE_EXTS = ["kt", "kts", "ts", "tsx", "js", "jsx", "java", "py", "go", "rs", "php", "rb", "c", "h", "cpp", "cc", "hpp", "cs", "swift"]
 const RG_FONTE = FONTE_EXTS.map((e) => `-g '*.${e}'`).join(" ")
 const RG_NAO_TESTE = ["-g '!*.test.*'", "-g '!*.spec.*'", "-g '!*Test.*'", "-g '!*Tests.*'", "-g '!**/test/**'", "-g '!**/tests/**'", "-g '!**/__tests__/**'"].join(" ")
 const GREP_FONTE = FONTE_EXTS.map((e) => `--include='*.${e}'`).join(" ")
@@ -220,7 +222,7 @@ export function comandoContagem(query: string): string {
 }
 
 const RE_VERIFICACAO =
-  /\b(gradlew|gradle|mvn|maven|cargo|go\s+(build|test|vet)|(npm|yarn|pnpm|bun)\s+(run\s+)?(build|test|lint|typecheck|ci)|tsc|eslint|ktlint|detekt|pytest|jest|vitest|rspec|phpunit)\b/i
+  /\b(gradlew|gradle|mvn|maven|cargo|make|cmake|ctest|dotnet\s+(build|test)|go\s+(build|test|vet)|(npm|yarn|pnpm|bun)\s+(run\s+)?(build|test|lint|typecheck|ci)|tsc|eslint|ktlint|detekt|pytest|jest|vitest|rspec|phpunit)\b/i
 const MAX_RECOVERY = 4
 
 export function ehVerificacao(comando: string): boolean {
@@ -355,6 +357,12 @@ export const ferramentas = {
     inputSchema: z.object({ comando: z.string(), motivo: z.string() }),
     execute: async ({ comando, motivo }, opts) => {
       if (BLOQUEIOS.some((r) => r.test(comando))) return `comando bloqueado por segurança: ${comando}`
+      // Trava de JAVA_HOME chutado: o contorno de ambiente é resolvido por `/usr/libexec/java_home`
+      // (contornoAmbiente). Se o modelo improvisa um caminho literal que NÃO existe (o caso real:
+      // `/usr/local/opt/openjdk@17`), não gasta 40s num build fadado — devolve na hora e reorienta.
+      const mJava = comando.match(/\bJAVA_HOME=(["']?)(\/[^"'\s&|;$]+)\1/)
+      if (mJava && !existsSync(mJava[2]))
+        return `JAVA_HOME chutado: "${mJava[2]}" não existe nesta máquina. NÃO adivinhe caminho de runtime — o ambiente Java é resolvido automaticamente, então rode o build direto (ex.: ./gradlew ...) sem exportar JAVA_HOME. Se faltar um JDK de fato, diga qual versão instalar e pare.`
       // 4.3 — ação repetida: o MESMO comando não-verificação já rodou nesta tarefa. Build/teste fica
       // de fora (re-rodar após conserto é legítimo); um `ls`/`cat`/`find` repetido é loop sem progresso.
       if (!ehVerificacao(comando) && acaoRepetida("rodar_comando", comando))
@@ -393,8 +401,11 @@ export const ferramentas = {
 
       let sufixo = ""
       if (code !== 0 && ehVerificacao(comando)) {
+        // Ancoragem no local exato do erro (grep grátis): antes de qualquer conselho, diz ONDE o
+        // compilador apontou — mata o "erro no teste vira edição no serviço de nome parecido".
+        sufixo += dicaLocaisErro(saida)
         const r = registrarFalha(saida)
-        sufixo = r.estourou
+        sufixo += r.estourou
           ? `\n\n--- TETO de ${TETO_RECOVERY} tentativas de recuperação atingido. PARE de tentar. Resuma ao usuário: o que tentou, o que descobriu (causa raiz com arquivo:linha se já achou) e onde travou. Se for ambiente/infra, diga o passo pra resolver (ex.: instalar o runtime na versão certa).`
           : sufixoRecovery(++_recovery)
       }

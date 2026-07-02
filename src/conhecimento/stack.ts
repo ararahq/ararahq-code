@@ -109,6 +109,51 @@ async function resolverMaven(dir: string): Promise<Omit<Subprojeto, "caminho">> 
   }
 }
 
+/** Alvos declarados num Makefile (`nome:`), ignorando atribuições `:=` e pattern rules (`%.o:`). Puro/testável. */
+export function alvosDeMakefile(conteudo: string): Set<string> {
+  const alvos = new Set<string>()
+  for (const linha of conteudo.split("\n")) {
+    const m = linha.match(/^([A-Za-z_][\w-]*)\s*:(?!=)/)
+    if (m) alvos.add(m[1])
+  }
+  return alvos
+}
+
+/** C ou C++? Deriva dos arquivos reais do diretório — nada assumido. */
+async function linguagemC(dir: string): Promise<string[]> {
+  try {
+    const nomes = await readdir(dir)
+    if (nomes.some((n) => /\.(cpp|cc|cxx|hpp|hh)$/.test(n))) return ["C++"]
+    if (nomes.some((n) => /\.(c|h)$/.test(n))) return ["C"]
+  } catch {}
+  return ["C", "C++"]
+}
+
+async function resolverMakefile(dir: string): Promise<Omit<Subprojeto, "caminho">> {
+  let alvos = new Set<string>()
+  try {
+    alvos = alvosDeMakefile(await Bun.file(`${dir}/Makefile`).text())
+  } catch {}
+  const testCmd = alvos.has("test") ? "make test" : alvos.has("check") ? "make check" : null
+  return {
+    linguagens: await linguagemC(dir),
+    buildSystem: "make",
+    buildCmd: "make",
+    testCmd,
+    lintCmd: null,
+  }
+}
+
+async function resolverCMake(dir: string): Promise<Omit<Subprojeto, "caminho">> {
+  return {
+    linguagens: await linguagemC(dir),
+    buildSystem: "cmake",
+    buildCmd: "cmake -S . -B build && cmake --build build",
+    testCmd: "ctest --test-dir build --output-on-failure",
+    lintCmd: null,
+  }
+}
+
 function estatico(
   linguagens: string[],
   buildSystem: string,
@@ -150,6 +195,14 @@ const MANIFESTOS: Manifesto[] = [
     arquivo: "Gemfile", linguagens: ["Ruby"], buildSystem: "bundler",
     resolver: estatico(["Ruby"], "bundler", "bundle install", "bundle exec rspec", "bundle exec rubocop"),
   },
+  {
+    arquivo: "Package.swift", linguagens: ["Swift"], buildSystem: "swiftpm",
+    resolver: estatico(["Swift"], "swiftpm", "swift build", "swift test", null),
+  },
+  // C/C++ por último de propósito: Makefile costuma ser só task-runner em repo de outra stack —
+  // o manifesto real (package.json, Cargo.toml, go.mod...) tem que ganhar quando coexistem.
+  { arquivo: "CMakeLists.txt", linguagens: ["C++"], buildSystem: "cmake", resolver: resolverCMake },
+  { arquivo: "Makefile", linguagens: ["C"], buildSystem: "make", resolver: resolverMakefile },
 ]
 
 async function existe(dir: string, arq: string): Promise<boolean> {

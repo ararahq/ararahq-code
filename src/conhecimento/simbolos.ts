@@ -129,6 +129,53 @@ const RUBY: Spec = {
   imports: [/^\s*require(?:_relative)?\s+["']([^"']+)["']/],
 }
 
+// C/C++: protótipo (`int f(int);`) NÃO é definição — as regras de função exigem linha sem `;` no fim.
+const C_CPP: Spec = {
+  chaves: true,
+  defs: [
+    { tipo: "classe", re: /^\s*(?:template\s*<[^>]*>\s*)?class\s+([A-Za-z_]\w*)(?![\w<>\s:]*;)/, grupo: 1 },
+    { tipo: "struct", re: /^\s*(?:typedef\s+)?struct\s+([A-Za-z_]\w*)(?![\w\s]*;)/, grupo: 1 },
+    { tipo: "enum", re: /^\s*(?:typedef\s+)?enum\s+(?:class\s+|struct\s+)?([A-Za-z_]\w*)/, grupo: 1 },
+    // definição de função com tipo de retorno: `static size_t hash_of(const char *s) {`.
+    // Qualificador `Classe::` fica FORA do nome — o grafo casa chamadas pelo nome puro.
+    { tipo: "funcao", re: /^\s*(?:[A-Za-z_][\w<>,*&\s:]*?[*&\s])(?:[A-Za-z_]\w*::)?(~?[A-Za-z_]\w*)\s*\([^;]*$/, grupo: 1 },
+    // construtor/destrutor C++ qualificado sem tipo de retorno: `Ledger::Ledger(...) {`
+    { tipo: "funcao", re: /^\s*(?:[A-Za-z_]\w*::)(~?[A-Za-z_]\w*)\s*\([^;]*$/, grupo: 1 },
+    { tipo: "tipo", re: /^\s*using\s+([A-Za-z_]\w*)\s*=/, grupo: 1 },
+    { tipo: "tipo", re: /^\s*typedef\s+[^;{]+[\s*]([A-Za-z_]\w*)\s*;/, grupo: 1 },
+    { tipo: "constante", re: /^\s*#\s*define\s+([A-Z][A-Z0-9_]*)\b/, grupo: 1 },
+  ],
+  imports: [/^\s*#\s*include\s*[<"]([^">]+)[">]/],
+}
+
+const SWIFT: Spec = {
+  chaves: true,
+  defs: [
+    { tipo: "interface", re: /^\s*(?:(?:public|private|internal|fileprivate|open)\s+)*protocol\s+([A-Za-z_]\w*)/, grupo: 1 },
+    { tipo: "enum", re: /^\s*(?:(?:public|private|internal|fileprivate|open|indirect)\s+)*enum\s+([A-Za-z_]\w*)/, grupo: 1 },
+    { tipo: "classe", re: /^\s*(?:(?:public|private|internal|fileprivate|open|final)\s+)*(?:class|actor)\s+([A-Za-z_]\w*)/, grupo: 1 },
+    { tipo: "struct", re: /^\s*(?:(?:public|private|internal|fileprivate)\s+)*struct\s+([A-Za-z_]\w*)/, grupo: 1 },
+    { tipo: "funcao", re: /^\s*(?:(?:public|private|internal|fileprivate|open|static|final|override|mutating|convenience|required)\s+|@\w+\s+)*func\s+([A-Za-z_]\w*)/, grupo: 1 },
+    { tipo: "tipo", re: /^\s*(?:(?:public|private|internal)\s+)*typealias\s+([A-Za-z_]\w*)/, grupo: 1 },
+  ],
+  imports: [/^\s*import\s+([\w.]+)/],
+}
+
+const CSHARP: Spec = {
+  chaves: true,
+  defs: [
+    { tipo: "interface", re: /^\s*(?:(?:public|private|protected|internal|partial)\s+)*interface\s+([A-Za-z_]\w*)/, grupo: 1 },
+    { tipo: "enum", re: /^\s*(?:(?:public|private|protected|internal)\s+)*enum\s+([A-Za-z_]\w*)/, grupo: 1 },
+    { tipo: "classe", re: /^\s*(?:(?:public|private|protected|internal|static|sealed|abstract|partial)\s+)*(?:class|record(?:\s+class)?)\s+([A-Za-z_]\w*)/, grupo: 1 },
+    { tipo: "struct", re: /^\s*(?:(?:public|private|protected|internal|readonly|partial)\s+)*(?:record\s+)?struct\s+([A-Za-z_]\w*)/, grupo: 1 },
+    // corpo obrigatório (sem `;` no fim) — membro de interface/assinatura abstrata fica de fora
+    { tipo: "metodo", re: /^\s*(?:(?:public|private|protected|internal|static|virtual|override|sealed|async|partial|new|extern|unsafe)\s+)+[\w<>\[\],.?\s]+?\s+([A-Za-z_]\w*)\s*\([^;]*$/, grupo: 1 },
+    { tipo: "constante", re: /^\s*(?:(?:public|private|protected|internal)\s+)*const\s+[\w<>\[\]?.]+\s+([A-Za-z_]\w*)/, grupo: 1 },
+  ],
+  // `using X.Y;` importa; `using var f = ...` e `using (...)` não casam (exigem `;` logo após o nome)
+  imports: [/^\s*using\s+(?:static\s+)?([\w.]+)\s*;/],
+}
+
 const POR_EXT: Record<string, { spec: Spec; lang: string }> = {
   kt: { spec: JVM, lang: "Kotlin" }, kts: { spec: JVM, lang: "Kotlin" },
   java: { spec: JAVA, lang: "Java" },
@@ -140,6 +187,11 @@ const POR_EXT: Record<string, { spec: Spec; lang: string }> = {
   rs: { spec: RUST, lang: "Rust" },
   php: { spec: PHP, lang: "PHP" },
   rb: { spec: RUBY, lang: "Ruby" },
+  c: { spec: C_CPP, lang: "C" }, h: { spec: C_CPP, lang: "C" },
+  cpp: { spec: C_CPP, lang: "C++" }, cc: { spec: C_CPP, lang: "C++" }, cxx: { spec: C_CPP, lang: "C++" },
+  hpp: { spec: C_CPP, lang: "C++" }, hh: { spec: C_CPP, lang: "C++" },
+  cs: { spec: CSHARP, lang: "C#" },
+  swift: { spec: SWIFT, lang: "Swift" },
 }
 
 function extOf(arquivo: string): string {
@@ -241,6 +293,10 @@ const RE_HERANCA_JAVA = /\b(?:class|interface)\s+[A-Za-z_]\w*(?:<[^>]*>)?\s+(?:e
 const RE_HERANCA_TS = /\b(?:class|interface)\s+[A-Za-z_$][\w$]*(?:<[^>]*>)?\s+(?:extends|implements)\s+([^{<]+)/
 const RE_HERANCA_PY = /\bclass\s+[A-Za-z_]\w*\s*\(([^)]+)\)/
 const RE_HERANCA_PHP = /\bclass\s+[A-Za-z_]\w*\s+(?:extends|implements)\s+([^{]+)/
+const RE_HERANCA_CS = /\b(?:class|interface|struct|record)\s+[A-Za-z_]\w*(?:<[^>]*>)?\s*(?:\([^)]*\))?\s*:\s*([^{]+)/
+const RE_HERANCA_SWIFT = /\b(?:class|struct|enum|protocol|actor|extension)\s+[A-Za-z_]\w*(?:<[^>]*>)?\s*:\s*([^{]+)/
+const RE_HERANCA_CPP = /\b(?:class|struct)\s+[A-Za-z_]\w*\s*(?:final\s*)?:\s*([^{]+)/
+const EXTS_CPP = new Set(["c", "h", "cpp", "cc", "cxx", "hpp", "hh"])
 
 /** Nomes das superclasses/interfaces na linha de definição. Só identificadores com inicial maiúscula. */
 function heranca(linhaDef: string, ext: string): string[] {
@@ -250,13 +306,21 @@ function heranca(linhaDef: string, ext: string): string[] {
     : ext === "ts" || ext === "tsx" || ext === "js" || ext === "jsx" ? RE_HERANCA_TS
     : ext === "py" ? RE_HERANCA_PY
     : ext === "php" ? RE_HERANCA_PHP
+    : ext === "cs" ? RE_HERANCA_CS
+    : ext === "swift" ? RE_HERANCA_SWIFT
+    : EXTS_CPP.has(ext) ? RE_HERANCA_CPP
     : null
   if (!re) return []
   const m = linhaDef.match(re)
   if (!m) return []
+  // C++ prefixa a base com especificador de acesso (`: public Base`) e qualifica com `::` —
+  // tira o especificador e normaliza `::` -> `.` antes do parse genérico (que já corta namespace)
+  const lista = EXTS_CPP.has(ext)
+    ? m[1].replace(/\b(?:public|protected|private|virtual)\b/g, " ").replace(/::/g, ".")
+    : m[1]
   return [
     ...new Set(
-      m[1]
+      lista
         .split(",")
         .map((s) => s.trim().replace(/[<(].*$/, "").replace(/\(\)$/, "").split(/\s+/)[0])
         .map((s) => s.replace(/^.*\./, ""))
@@ -288,7 +352,7 @@ const RE_TIPO_REF = /\b([A-Z][A-Za-z0-9_]{2,})\b/g
 
 /**
  * Tipos PascalCase referenciados num trecho (assinatura/campos): pega injeção por construtor
- * (`val svc: AraraPhoneNumberService`), tipos de retorno e de campo. Vira USA_TIPO no grafo, mas só
+ * (`val svc: LedgerService`), tipos de retorno e de campo. Vira USA_TIPO no grafo, mas só
  * pra tipos importados — é o que conecta um consumidor ao serviço sob DI, onde não há chamada direta.
  */
 function tiposReferenciados(trecho: string, proprio: string): string[] {

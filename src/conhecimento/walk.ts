@@ -11,6 +11,7 @@ export const DIRS_IGNORADOS = new Set([
 /** Extensões de código-fonte que o mapa simbólico sabe extrair. Agnóstico de linguagem. */
 export const EXTS_FONTE = new Set([
   "kt", "kts", "ts", "tsx", "js", "jsx", "mjs", "cjs", "java", "py", "go", "rs", "php", "rb",
+  "c", "h", "cpp", "cc", "cxx", "hpp", "hh", "cs", "swift",
 ])
 
 const MAX_ARQUIVOS = 8000

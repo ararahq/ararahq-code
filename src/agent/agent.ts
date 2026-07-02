@@ -17,6 +17,8 @@ import { pareceSeguimento, pontuarDiff, type Modo } from "../engine/marques"
 import { pareceMultiPasso, planejar, ferramentasDaFase, type Passo } from "./planner"
 import { diagnosticarComFallback, reunirMaterial, gerarCandidatosDiagnostico } from "./diagnostico"
 import { pareceConsertarBuild, aterrarPorBuild } from "./grounding"
+import { ancorarAlvo, notaAncoragem, diagnosticoAncoraNoAlvo, montarRespostaForaDoAlvo, type AlvoAncorado } from "./alvo"
+import { listarFontes } from "../conhecimento/walk"
 import { registrarBaseline, baselineAtual, compararComBaseline, rotuloFalha } from "./baseline"
 import { anexarImagens, type ParteImagem } from "./imagem"
 import { selecionarPorVerificacao } from "./testtime"
@@ -426,6 +428,34 @@ type FaseDiagnostico =
   | { ok: false; motivo: "abortado" }
   | { ok: false; motivo: "erro"; erro: unknown }
   | { ok: false; motivo: "naoCravou"; texto: string; modelos: string[]; tokens: number; custoUSD: number; ms: number }
+  // Cravou, mas FORA do alvo que o usuário apontou (e sem conexão de import com ele) — fuga de alvo.
+  // Quem chama responde honesto (montarRespostaForaDoAlvo) em vez de executar no lugar errado.
+  | { ok: false; motivo: "foraDoAlvo"; texto: string; foraDoAlvo: string[]; modelos: string[]; tokens: number; custoUSD: number; ms: number }
+
+/**
+ * Ancoragem no alvo citado (bug de sintoma): a prosa do pedido aponta um componente que casa arquivo
+ * real do repo? Determinístico (Marques + basenames, sem modelo). Best-effort: falha => null (livre).
+ */
+async function ancorarAlvoDoRepo(input: string): Promise<AlvoAncorado | null> {
+  try {
+    const fontes = await listarFontes(process.cwd())
+    return ancorarAlvo(input, fontes.map((f) => f.caminho))
+  } catch {
+    return null
+  }
+}
+
+/** Lê um arquivo-fonte relativo à raiz (pro veredito de conexão por import). Ausente/fora => null. */
+async function lerTextoFonte(arquivo: string): Promise<string | null> {
+  if (arquivo.startsWith("/")) return null
+  try {
+    const f = Bun.file(`${process.cwd()}/${arquivo}`)
+    if (!(await f.exists())) return null
+    return await f.text()
+  } catch {
+    return null
+  }
+}
 
 /**
  * Fase 1 do pipeline de diagnóstico (M3): UMA passada de raciocínio sobre o material já reunido,
@@ -436,6 +466,7 @@ type FaseDiagnostico =
 async function diagnosticarEMastigar(
   input: string,
   openrouter: (slug: string) => Modelo,
+  alvo: AlvoAncorado | null = null,
 ): Promise<FaseDiagnostico> {
   const acR = new AbortController()
   _abort = acR
@@ -444,7 +475,7 @@ async function diagnosticarEMastigar(
   let diag: Awaited<ReturnType<typeof diagnosticarComFallback>>
   try {
     diag = await diagnosticarComFallback(
-      input,
+      alvo ? `${input}${notaAncoragem(alvo)}` : input,
       [...CADEIA_DIAGNOSTICO],
       (slug) => openrouter(slug) as Modelo,
       custoUSD,
@@ -469,7 +500,18 @@ async function diagnosticarEMastigar(
     return { ok: false, motivo: "naoCravou", texto: diag.texto, modelos: diag.modelosUsados, tokens, custoUSD: diag.custoUSD, ms: Date.now() - inicio }
   }
   logInterno(`diagnostico cravou modelo=${diag.modelo} rodadas=${diag.rodadas}`)
-  definirEscopo(escopoDoDiagnostico(diag.texto))
+  // Gate de ancoragem: cravou FORA do alvo apontado (e desconectado dele por import) = fuga de alvo.
+  // Não executa um conserto que o usuário não pediu — devolve pro chamador responder honesto.
+  if (alvo) {
+    const veredito = await diagnosticoAncoraNoAlvo(alvo, diag.texto, lerTextoFonte)
+    if (!veredito.ancorado) {
+      logInterno(`diagnostico fora-do-alvo: cravou em [${veredito.foraDoAlvo.join(", ")}], alvo era [${alvo.arquivos.join(", ")}]`)
+      return { ok: false, motivo: "foraDoAlvo", texto: diag.texto, foraDoAlvo: veredito.foraDoAlvo, modelos: diag.modelosUsados, tokens, custoUSD: diag.custoUSD, ms: Date.now() - inicio }
+    }
+  }
+  // Escopo: os arquivos da causa + o alvo apontado (a edição pode precisar tocar o próprio alvo).
+  const escopoDiag = escopoDoDiagnostico(diag.texto)
+  definirEscopo(alvo ? escopoDeArquivos([...escopoDiag.arquivos, ...alvo.arquivos]) : escopoDiag)
   logInterno(`escopo=[${[...escopoAtual().arquivos].join(", ")}]`)
   const tarefa = `A causa já foi diagnosticada abaixo. Aplique a correção SOMENTE nos arquivos citados na causa: leia o arquivo citado, faça a edição exata com editar_arquivo e rode o build pra verificar. NÃO gaste ações conferindo imports, assinaturas ou se uma classe/método existe — o build verifica isso; vá direto edição -> build. NÃO mude outros pontos com o mesmo padrão (podem ser intencionais). NÃO repita estas instruções na tua resposta; aja sobre elas. Se já estiver correto, confirme.\n\n${diag.texto}`
   return { ok: true, tarefa, texto: diag.texto, modelos: diag.modelosUsados, tokens, custoUSD: diag.custoUSD, ms: Date.now() - inicio }
@@ -968,7 +1010,15 @@ export async function processar(input: string, imagens: ParteImagem[] = []) {
   let diagTexto: string | null = null
 
   if (modo === "diagnostico") {
-    const d = await diagnosticarEMastigar(input, openrouter)
+    // Ancoragem no alvo citado: o usuário apontou um componente específico em prosa? A investigação
+    // ancora nele e o conserto TRAVA nele — sem isso, o modo de falha medido: concluir que o alvo
+    // está correto, consertar um componente parecido que ninguém pediu e declarar verde.
+    const alvo = await ancorarAlvoDoRepo(input)
+    if (alvo) {
+      ui.subItem(`alvo apontado: ${alvo.arquivos.join(", ")}`)
+      logInterno(`alvo ancorado em [${alvo.arquivos.join(", ")}] por termos [${alvo.termos.join(", ")}]`)
+    }
+    const d = await diagnosticarEMastigar(input, openrouter, alvo)
     if (!d.ok) {
       if (d.motivo === "abortado") {
         finalizarAbort()
@@ -976,6 +1026,25 @@ export async function processar(input: string, imagens: ParteImagem[] = []) {
       }
       if (d.motivo === "erro") {
         ui.erro(msgErro(d.erro))
+        return
+      }
+      if (d.motivo === "foraDoAlvo" && alvo) {
+        const resposta = montarRespostaForaDoAlvo(alvo, d.foraDoAlvo, d.texto)
+        ui.linhaBranca()
+        ui.resposta(resposta)
+        ui.linhaBranca()
+        historico.push({ role: "user", content: input })
+        historico.push({ role: "assistant", content: resposta })
+        registrarDesfecho(resposta, "sem-gate")
+        ui.metricas(d.tokens, d.custoUSD, d.ms)
+        await registrarTarefa({
+          modo,
+          modelo: d.modelos.join("→") || MODELOS.diagnostico,
+          thinking: true,
+          tokens: d.tokens,
+          custoUSD: d.custoUSD,
+          ms: d.ms,
+        })
         return
       }
       // naoCravou — 3.4 test-time compute antes de desistir: gera N candidatos em paralelo e aplica o
@@ -1096,7 +1165,8 @@ export async function processar(input: string, imagens: ParteImagem[] = []) {
     registrarTrocaMarcha()
     modoFinal = "diagnostico"
     logInterno("reclassificacao execucao->diagnostico")
-    const d = await diagnosticarEMastigar(input, openrouter)
+    const alvoRe = await ancorarAlvoDoRepo(input)
+    const d = await diagnosticarEMastigar(input, openrouter, alvoRe)
     if (d.ok) {
       tokensRaciocinio += d.tokens
       custoRaciocinio += d.custoUSD
@@ -1130,6 +1200,12 @@ export async function processar(input: string, imagens: ParteImagem[] = []) {
     } else if (d.motivo === "erro") {
       ui.erro(msgErro(d.erro))
       return
+    } else if (d.motivo === "foraDoAlvo" && alvoRe) {
+      // Fuga de alvo na reclassificação: não executa o mastigado — a resposta final vira a honesta.
+      tokensRaciocinio += d.tokens
+      custoRaciocinio += d.custoUSD
+      modelosDiag = d.modelos
+      respostaFinal = montarRespostaForaDoAlvo(alvoRe, d.foraDoAlvo, d.texto)
     }
   }
 

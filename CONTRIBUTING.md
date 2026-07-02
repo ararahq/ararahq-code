@@ -31,6 +31,7 @@ bun run typecheck # tsc --noEmit, exit 0
 
 - **Todo código tem teste.** Feature, fix ou refactor: se você tocou, escreveu ou atualizou teste. Funções puras (parsing, classificação, roteamento) têm unit obrigatório — são a espinha da tese.
 - **Regra de ouro:** se você não consegue escrever um teste que falha sem a sua mudança e passa com ela, a mudança não está pronta.
+- **Zero comentários no código.** O código se explica por nome e estrutura — se precisou comentar, extraia uma função/constante com nome melhor. Decisão medida, trade-off ou armadilha vai em [`docs/decisoes.md`](docs/decisoes.md) (decisão → evidência), nunca inline. PR com comentário volta.
 - Edições cirúrgicas: troque o bloco exato, não reescreva o arquivo.
 - Sem `console.log` no código de produção — o `logInterno` (stderr sob `ARARA_DEBUG=1`) é o canal de debug.
 

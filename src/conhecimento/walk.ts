@@ -1,14 +1,12 @@
 import { readdir, stat } from "node:fs/promises"
 import { relative } from "node:path"
 
-/** Diretórios que nunca entram no índice (build output, deps, VCS, caches). */
 export const DIRS_IGNORADOS = new Set([
   ".git", "node_modules", "build", "bin", ".gradle", "dist", "out", "target", ".next", "vendor",
   "pgdata", ".github", ".idea", ".vscode", "coverage", ".venv", "__pycache__", ".smithery", "dumps",
   ".turbo", ".cache", "tmp", ".terraform",
 ])
 
-/** Extensões de código-fonte que o mapa simbólico sabe extrair. Agnóstico de linguagem. */
 export const EXTS_FONTE = new Set([
   "kt", "kts", "ts", "tsx", "js", "jsx", "mjs", "cjs", "java", "py", "go", "rs", "php", "rb",
   "c", "h", "cpp", "cc", "cxx", "hpp", "hh", "cs", "swift",
@@ -25,11 +23,6 @@ function extensao(nome: string): string {
   return i < 0 ? "" : nome.slice(i + 1).toLowerCase()
 }
 
-/**
- * Varre a árvore a partir de `raiz` e devolve os arquivos-fonte (por extensão) com mtime e tamanho,
- * em caminho relativo à raiz. Caps duros pra não travar em monorepo grande: ignora dirs de build/deps,
- * pula arquivos acima de `MAX_BYTES_ARQUIVO` (gerados/minificados), limita profundidade e total.
- */
 export async function listarFontes(raiz: string): Promise<ArquivoFonte[]> {
   const out: ArquivoFonte[] = []
   await caminhar(raiz, raiz, 0, out)
@@ -62,7 +55,7 @@ async function caminhar(raiz: string, dir: string, prof: number, out: ArquivoFon
       if (s.size > MAX_BYTES_ARQUIVO) continue
       out.push({ caminho: relative(raiz, abs), mtimeMs: Math.floor(s.mtimeMs), bytes: s.size })
     } catch {
-      // arquivo sumiu entre readdir e stat: ignora
+
     }
   }
 }

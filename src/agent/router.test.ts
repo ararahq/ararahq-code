@@ -11,7 +11,7 @@ import {
 
 describe("3.6 — rotear com tarefa composta", () => {
   test("diag+exec com arquivo citado força DIAGNÓSTICO (não pula pra execução)", () => {
-    // O bug que 3.6 mata: o desempate por arquivo citado mandaria pra execução, pulando o diagnóstico.
+
     const d = rotear("diagnostica o bug no PoolService.kt e corrige")
     expect(d.modo).toBe("diagnostico")
     expect(d.pedirQuebra).toBeUndefined()

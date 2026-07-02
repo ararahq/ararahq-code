@@ -52,7 +52,6 @@ async function salvar(raiz: string, m: Memoria): Promise<void> {
   await gravarJson(raiz, ARQUIVO, m)
 }
 
-/** Registra um bug resolvido (sintoma -> causa raiz -> arquivo:linha -> correção). Persiste acumulando. */
 export async function registrarBug(
   raiz: string,
   dados: { sintoma: string; causaRaiz: string; arquivoLinha: string; correcao: string },
@@ -64,14 +63,8 @@ export async function registrarBug(
   return bug
 }
 
-// Primeiro `arquivo:linha` citado num texto (agnóstico de extensão, como o resto do 3.7).
 const RE_ARQUIVO_LINHA = /[\w./-]+\.[A-Za-z][A-Za-z0-9]{1,9}:\d+/
 
-/**
- * 1.5 — Monta o registro de um bug resolvido a partir do sintoma original, do diagnóstico mastigado e
- * dos arquivos editados. Pura e testável: o agent chama `registrarBug` com o resultado SÓ quando o
- * build fecha verde num fluxo de diagnóstico — assim a memória acumula casos de verdade, não palpites.
- */
 export function montarRegistroBug(
   sintoma: string,
   diagnostico: string,
@@ -86,7 +79,6 @@ export function montarRegistroBug(
   }
 }
 
-/** Registra uma decisão de arquitetura/projeto. Persiste acumulando entre sessões. */
 export async function registrarDecisao(
   raiz: string,
   dados: { titulo: string; contexto: string; decisao: string },
@@ -98,7 +90,6 @@ export async function registrarDecisao(
   return dec
 }
 
-/** Registra um padrão recorrente do codebase (convenção, idiom, armadilha). */
 export async function registrarPadrao(
   raiz: string,
   dados: { nome: string; descricao: string },
@@ -114,7 +105,6 @@ function termos(texto: string): Set<string> {
   return new Set(extrairEntidades(texto))
 }
 
-/** Similaridade por overlap de termos (Jaccard) entre o sintoma da query e o de um precedente. */
 function similaridade(a: Set<string>, b: Set<string>): number {
   if (!a.size || !b.size) return 0
   let inter = 0
@@ -125,11 +115,6 @@ function similaridade(a: Set<string>, b: Set<string>): number {
 const MIN_SCORE = 0.05
 const MAX_RESULTADOS = 5
 
-/**
- * Recupera precedentes (bugs e decisões) por similaridade de termos com o sintoma dado (1.5).
- * Reusa `extrairEntidades` (tokenização PT->EN + camelCase) pra casar mesmo com fraseado diferente.
- * Bug casa contra sintoma+causaRaiz+correção; decisão contra título+contexto+decisão. Ordenado desc.
- */
 export async function buscarPrecedente(raiz: string, sintoma: string): Promise<Precedente[]> {
   const m = await carregarMemoria(raiz)
   const alvo = termos(sintoma)

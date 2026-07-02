@@ -1,9 +1,7 @@
 import { renderMarkdown } from "./markdown"
 
-// Paleta ancorada nos tokens da identidade Arara (ararahq-identidade.pen / globals.css).
-// brand-400 = teal vivo (primário), brand-500 = teal profundo (moldura/mascote). Não invente tom fora do ramp.
-const BRAND = [56, 209, 216] // brand-400 #38d1d8
-const BRAND_DEEP = [28, 153, 167] // brand-500 #1c99a7
+const BRAND = [56, 209, 216]
+const BRAND_DEEP = [28, 153, 167]
 const TEXT = [244, 248, 250]
 const DIM = [118, 160, 166]
 const WARN = [247, 185, 85]
@@ -106,8 +104,6 @@ async function lerLinha(prompt: string): Promise<string | null> {
   return r.done ? null : r.value
 }
 
-// Modo headless (sandbox/CI): NUNCA lê stdin — num container sem TTY, esperar input trava pra
-// sempre. prompt/perguntar devolvem null e confirmar() NEGA: comando perigoso não roda sem humano.
 let _headless = false
 export function ativarHeadless(): void {
   _headless = true
@@ -127,7 +123,7 @@ function revelarCursor() {
     cursorOculto = false
   }
 }
-// Garantia anti-idiota: nunca deixar o cursor escondido, aconteça o que acontecer.
+
 process.on("exit", revelarCursor)
 let spinnerTimer: ReturnType<typeof setInterval> | null = null
 function spinnerStartRaw(label: string) {
@@ -222,8 +218,7 @@ export const ui = {
     return v === "s" || v === "sim" || v === "y"
   },
   passo: (m: string) => console.log(brand("⠿ ") + dim(m)),
-  // Cabeçalho da tarefa: "Jade · <modo>". O modelo de cada tarefa fica no /custo e no ~/.arara/custo.json.
-  // A inteligência (qual marcha rodou) é a propriedade intelectual — não vaza pra tela.
+
   jade: (modo: string) => console.log(`${brand("◆")} ${brand("Jade")} ${dim("· " + modo)}`),
   subItem: (m: string) => console.log(`  ${brand("→")} ${dim(m)}`),
   info: (m: string) => console.log(txt(m)),
@@ -265,7 +260,7 @@ export const ui = {
     rem.slice(0, 40).forEach((l) => console.log(err(`  - ${l}`)))
     add.slice(0, 40).forEach((l) => console.log(brand(`  + ${l}`)))
   },
-  // Métricas da linha: tokens/custo/tempo. O modelo por tarefa está no /custo (escolha de UX, não segredo).
+
   metricas(tokens: number, custo: number, ms: number) {
     const tk = tokens >= 1000 ? `${(tokens / 1000).toFixed(1)}k` : `${tokens}`
     console.log(`${brand("✓")} ${dim(`pronto · ${tk} tokens · $${custo.toFixed(4)} · ${(ms / 1000).toFixed(1)}s`)}`)
@@ -281,8 +276,7 @@ export const ui = {
     console.log(`  ${brand(rotuloMes)} ${dim(fmt(mes))}`)
     console.log()
   },
-  // Painel ADMIN interno (D10): revela a marcha e o MODELO REAL por tarefa. Só aqui, no /custo —
-  // É o canal de auditoria de qual marcha/modelo rodou cada tarefa.
+
   custoHistorico(linhas: { modo: string; modelo: string; tokens: number; custoUSD: number; ms: number }[]) {
     if (!linhas.length) return
     console.log(brand(bold("  Marchas (admin · modelo real)")))

@@ -59,7 +59,7 @@ describe("extrairSimbolos — C", () => {
     expect(nomes).toContain("funcao:saldo_de")
     expect(nomes).toContain("struct:conta")
     expect(nomes).toContain("constante:MAX_CONTAS")
-    // o protótipo (linha 9, termina em ;) não vira segunda definição
+
     expect(r.simbolos.filter((s) => s.nome === "saldo_de")).toHaveLength(1)
   })
 

@@ -22,7 +22,7 @@ describe("copiloto — decidirModo planejar / comunicar", () => {
     expect(decidirModo("gera o changelog da release")).toBe("comunicar")
   })
   test("comunicar/planejar ganham do verbo de ação", () => {
-    // "cria" é execução, mas "escreve o commit" é comunicar
+
     expect(decidirModo("escreve o commit e cria a tag")).toBe("comunicar")
   })
 })
@@ -76,7 +76,7 @@ describe("Marques — ponte de domínio PT→EN (aterrada no vocab)", () => {
     expect(r).toContain("double")
   })
   test("vocab aterra: só mantém alvos que existem no projeto", () => {
-    const r = expandirDominio(["recarreguei"], new Set(["credit"])) // só 'credit' existe
+    const r = expandirDominio(["recarreguei"], new Set(["credit"]))
     expect(r).toContain("credit")
     expect(r).not.toContain("recharge")
     expect(r).not.toContain("topup")
@@ -119,7 +119,7 @@ describe("copiloto — decidirModo compreender", () => {
     expect(decidirModo("me dá uma visão geral do projeto")).toBe("compreender")
   })
   test("explicar + pedir mudança NÃO é compreender (o verbo de ação puxa pra execução/diag)", () => {
-    // tem 'troca' (execução) -> não cai em compreender mesmo com 'explica o fluxo'
+
     expect(decidirModo("explica o fluxo e troca a linha 10")).not.toBe("compreender")
   })
   test("conversa continua conversa", () => {

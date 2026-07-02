@@ -129,17 +129,15 @@ const RUBY: Spec = {
   imports: [/^\s*require(?:_relative)?\s+["']([^"']+)["']/],
 }
 
-// C/C++: protótipo (`int f(int);`) NÃO é definição — as regras de função exigem linha sem `;` no fim.
 const C_CPP: Spec = {
   chaves: true,
   defs: [
     { tipo: "classe", re: /^\s*(?:template\s*<[^>]*>\s*)?class\s+([A-Za-z_]\w*)(?![\w<>\s:]*;)/, grupo: 1 },
     { tipo: "struct", re: /^\s*(?:typedef\s+)?struct\s+([A-Za-z_]\w*)(?![\w\s]*;)/, grupo: 1 },
     { tipo: "enum", re: /^\s*(?:typedef\s+)?enum\s+(?:class\s+|struct\s+)?([A-Za-z_]\w*)/, grupo: 1 },
-    // definição de função com tipo de retorno: `static size_t hash_of(const char *s) {`.
-    // Qualificador `Classe::` fica FORA do nome — o grafo casa chamadas pelo nome puro.
+
     { tipo: "funcao", re: /^\s*(?:[A-Za-z_][\w<>,*&\s:]*?[*&\s])(?:[A-Za-z_]\w*::)?(~?[A-Za-z_]\w*)\s*\([^;]*$/, grupo: 1 },
-    // construtor/destrutor C++ qualificado sem tipo de retorno: `Ledger::Ledger(...) {`
+
     { tipo: "funcao", re: /^\s*(?:[A-Za-z_]\w*::)(~?[A-Za-z_]\w*)\s*\([^;]*$/, grupo: 1 },
     { tipo: "tipo", re: /^\s*using\s+([A-Za-z_]\w*)\s*=/, grupo: 1 },
     { tipo: "tipo", re: /^\s*typedef\s+[^;{]+[\s*]([A-Za-z_]\w*)\s*;/, grupo: 1 },
@@ -168,11 +166,11 @@ const CSHARP: Spec = {
     { tipo: "enum", re: /^\s*(?:(?:public|private|protected|internal)\s+)*enum\s+([A-Za-z_]\w*)/, grupo: 1 },
     { tipo: "classe", re: /^\s*(?:(?:public|private|protected|internal|static|sealed|abstract|partial)\s+)*(?:class|record(?:\s+class)?)\s+([A-Za-z_]\w*)/, grupo: 1 },
     { tipo: "struct", re: /^\s*(?:(?:public|private|protected|internal|readonly|partial)\s+)*(?:record\s+)?struct\s+([A-Za-z_]\w*)/, grupo: 1 },
-    // corpo obrigatório (sem `;` no fim) — membro de interface/assinatura abstrata fica de fora
+
     { tipo: "metodo", re: /^\s*(?:(?:public|private|protected|internal|static|virtual|override|sealed|async|partial|new|extern|unsafe)\s+)+[\w<>\[\],.?\s]+?\s+([A-Za-z_]\w*)\s*\([^;]*$/, grupo: 1 },
     { tipo: "constante", re: /^\s*(?:(?:public|private|protected|internal)\s+)*const\s+[\w<>\[\]?.]+\s+([A-Za-z_]\w*)/, grupo: 1 },
   ],
-  // `using X.Y;` importa; `using var f = ...` e `using (...)` não casam (exigem `;` logo após o nome)
+
   imports: [/^\s*using\s+(?:static\s+)?([\w.]+)\s*;/],
 }
 
@@ -208,7 +206,7 @@ const MAX_ASSINATURA = 200
 
 function assinaturaDe(linhas: string[], idx: number): string {
   let s = linhas[idx].trim()
-  // Assinatura pode quebrar linha: junta até fechar parêntese ou achar corpo/`=`.
+
   let bal = (s.match(/\(/g)?.length ?? 0) - (s.match(/\)/g)?.length ?? 0)
   let i = idx
   while (bal > 0 && i + 1 < linhas.length && i - idx < 6) {
@@ -221,7 +219,6 @@ function assinaturaDe(linhas: string[], idx: number): string {
   return s.length > MAX_ASSINATURA ? `${s.slice(0, MAX_ASSINATURA)}…` : s
 }
 
-/** Fim de um símbolo em linguagem de chaves: fecha pelo balanceamento de `{}` a partir da definição. */
 function fimPorChaves(linhas: string[], inicio: number, limite: number): number {
   let bal = 0
   let abriu = false
@@ -240,7 +237,6 @@ function fimPorChaves(linhas: string[], inicio: number, limite: number): number 
   return limite
 }
 
-/** Remove conteúdo de strings/comentários de linha pra não contar `{`/`}` literais no balanceamento. */
 function semStringsEComentarios(linha: string): string {
   return linha
     .replace(/\\./g, "")
@@ -253,11 +249,6 @@ function semStringsEComentarios(linha: string): string {
 
 const MAX_LINHAS_STATEMENT = 30
 
-/**
- * Fim de um símbolo que é statement único (constante, typealias): fecha quando todos os delimitadores
- * `()[]{}` abertos na declaração se balanceiam. Evita que uma `const X = /regex/` "absorva" linhas
- * seguintes (e chamadas de outras funções) por procurar uma chave de bloco que não é dela.
- */
 function fimDeStatement(linhas: string[], inicio: number): number {
   let bal = 0
   let tocou = false
@@ -278,7 +269,6 @@ function fimDeStatement(linhas: string[], inicio: number): number {
   return inicio + 1
 }
 
-/** Fim de um símbolo em linguagem por indentação (Python/Ruby): próxima linha de código com indent <=. */
 function fimPorIndentacao(linhas: string[], inicio: number, indentDef: number, limite: number): number {
   for (let i = inicio + 1; i < limite; i++) {
     const l = linhas[i]
@@ -298,7 +288,6 @@ const RE_HERANCA_SWIFT = /\b(?:class|struct|enum|protocol|actor|extension)\s+[A-
 const RE_HERANCA_CPP = /\b(?:class|struct)\s+[A-Za-z_]\w*\s*(?:final\s*)?:\s*([^{]+)/
 const EXTS_CPP = new Set(["c", "h", "cpp", "cc", "cxx", "hpp", "hh"])
 
-/** Nomes das superclasses/interfaces na linha de definição. Só identificadores com inicial maiúscula. */
 function heranca(linhaDef: string, ext: string): string[] {
   const re =
     ext === "kt" || ext === "kts" ? RE_HERANCA_KT
@@ -313,8 +302,7 @@ function heranca(linhaDef: string, ext: string): string[] {
   if (!re) return []
   const m = linhaDef.match(re)
   if (!m) return []
-  // C++ prefixa a base com especificador de acesso (`: public Base`) e qualifica com `::` —
-  // tira o especificador e normaliza `::` -> `.` antes do parse genérico (que já corta namespace)
+
   const lista = EXTS_CPP.has(ext)
     ? m[1].replace(/\b(?:public|protected|private|virtual)\b/g, " ").replace(/::/g, ".")
     : m[1]
@@ -336,7 +324,6 @@ const PALAVRAS_CHAMADA = new Set([
   "val", "var", "let", "const", "new", "throw", "yield", "in", "is", "as",
 ])
 
-/** Identificadores chamados como função no corpo (resolução real fica pro grafo). Exclui o próprio nome. */
 function chamadasNoCorpo(corpo: string, proprio: string): string[] {
   const out = new Set<string>()
   let m: RegExpExecArray | null
@@ -350,11 +337,6 @@ function chamadasNoCorpo(corpo: string, proprio: string): string[] {
 
 const RE_TIPO_REF = /\b([A-Z][A-Za-z0-9_]{2,})\b/g
 
-/**
- * Tipos PascalCase referenciados num trecho (assinatura/campos): pega injeção por construtor
- * (`val svc: LedgerService`), tipos de retorno e de campo. Vira USA_TIPO no grafo, mas só
- * pra tipos importados — é o que conecta um consumidor ao serviço sob DI, onde não há chamada direta.
- */
 function tiposReferenciados(trecho: string, proprio: string): string[] {
   const out = new Set<string>()
   let m: RegExpExecArray | null
@@ -368,12 +350,6 @@ function tiposReferenciados(trecho: string, proprio: string): string[] {
 const MAX_LINHAS = 12_000
 const CABECALHO_TIPOS = 15
 
-/**
- * Extrai símbolos definidos, imports, assinaturas e ranges [início, fim) de um arquivo-fonte (1.2),
- * por regex específica da linguagem. Linhas 1-based. Ranges via balanceamento de chaves (Kotlin/TS/
- * Java/Go/Rust/PHP) ou indentação (Python/Ruby). v1 cobre símbolos de topo e métodos — suficiente
- * pra extração cirúrgica e pro grafo. Degrada pra {simbolos:[], imports:[]} em linguagem desconhecida.
- */
 export function extrairSimbolos(arquivo: string, conteudo: string): ArquivoSimbolos {
   const ext = extOf(arquivo)
   const cfg = POR_EXT[ext]
@@ -472,12 +448,6 @@ export type MapaSimbolico = {
   reverso: Record<string, string[]>
 }
 
-/**
- * Monta o índice reverso `nome do símbolo -> arquivos que o definem`. Usa Map (não objeto) porque o
- * código alheio pode ter símbolo chamado `constructor`/`toString`/`hasOwnProperty` — num objeto `{}`
- * essas chaves resolvem pra herança do Object.prototype e quebram (`.add` não é função). Map e o
- * retorno sem protótipo (`create(null)`) blindam contra prototype pollution em qualquer codebase.
- */
 export function indiceReverso(arquivos: ArquivoSimbolos[]): Record<string, string[]> {
   const rev = new Map<string, Set<string>>()
   for (const a of arquivos) {

@@ -1,10 +1,5 @@
 import type { DriverSandbox } from "./despachante"
 
-// Driver Fly Machines (produção): sobe uma máquina efêmera por tarefa — boot em ~centenas de ms,
-// cobrança por segundo, auto_destroy quando o processo sai. É o "sandbox barato onde nada roda na
-// máquina do usuário": o container clona, trabalha, abre PR, reporta e MORRE. A env (com segredos)
-// vai pela API da Fly em TLS; a máquina não fica de pé esperando nada.
-
 const API = "https://api.machines.dev/v1"
 const TIMEOUT_API_MS = 15_000
 
@@ -36,7 +31,7 @@ export function criarDriverFly(env: Record<string, string | undefined>): DriverS
         if (!resp.ok) {
           return { ok: false, erro: `Fly API ${resp.status}: ${(await resp.text()).slice(0, 300)}` }
         }
-        // a máquina roda sozinha e se destrói; o resultado chega pelo callback do sandbox
+
         return { ok: true }
       } catch (e) {
         return { ok: false, erro: `falha ao chamar a Fly API: ${(e as Error).message}` }

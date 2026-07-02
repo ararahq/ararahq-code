@@ -1,14 +1,6 @@
 import { generateObject } from "ai"
 import { z } from "zod"
 
-// Maestro — orquestração de tarefas COMPLEXAS. A tese: o agente já é forte em problema MÉDIO
-// (diagnosticar + corrigir + verificar UM ponto). Problema complexo NÃO é um problema maior — é uma
-// SEQUÊNCIA de problemas médios. Em vez de um loop gigante (que a trava de trajetória aborta aos 16
-// passos), o Maestro DECOMPÕE em sub-objetivos verificáveis e roda cada um na máquina já provada,
-// com portão de build e CHECKPOINT entre eles. Cada sub-objetivo é uma chamada de execução nova =
-// orçamento de passos próprio, então o teto global deixa de ser o limite. Tarefa simples gera UM
-// sub-objetivo e passa direto, sem overhead. O modelo só é forte UMA vez (o plano); a execução é barata.
-
 export const MAX_SUBOBJETIVOS = 10
 
 export type SubObjetivo = {
@@ -47,11 +39,6 @@ const SISTEMA_DECOMPOR =
 
 export type ResultadoDecompor = { plano: Plano; inTok: number; outTok: number }
 
-/**
- * Decompõe a tarefa num plano de sub-objetivos via UMA passada de raciocínio (modelo forte, saída
- * estruturada). Determinístico de formato (schema), não de conteúdo. Devolve null se a decomposição
- * falhar (modelo sem suporte a saída estruturada, erro de rede) — quem chama degrada pro caminho normal.
- */
 export async function decompor(input: string, model: ModeloLLM): Promise<ResultadoDecompor | null> {
   try {
     const r = await generateObject({
@@ -72,12 +59,10 @@ export async function decompor(input: string, model: ModeloLLM): Promise<Resulta
   }
 }
 
-/** A tarefa é mesmo complexa (vale orquestrar)? Só quando a decomposição rende mais de um passo. */
 export function valeOrquestrar(plano: Plano | null): boolean {
   return !!plano && plano.subobjetivos.length > 1
 }
 
-/** Instrução de UM sub-objetivo pra execução guiada (injetada como mensagem da passada, não no histórico). */
 export function promptDoSub(plano: Plano, indice: number): string {
   const sub = plano.subobjetivos[indice]
   const total = plano.subobjetivos.length
@@ -90,16 +75,9 @@ export function promptDoSub(plano: Plano, indice: number): string {
   )
 }
 
-// --- Checkpoint + relatório honesto ------------------------------------------
-
 export type EstadoSub = "verde" | "sem-gate" | "travou"
 export type SubFeito = { descricao: string; estado: EstadoSub }
 
-/**
- * Relatório de progresso quando a orquestração fecha ou trava. Lista o que JÁ ficou pronto (com o
- * estado do build de cada um) e, se travou, ONDE e por quê — com o que ainda falta. Nunca some com o
- * progresso: complexo que para na metade tem que devolver o mapa do que foi feito.
- */
 export function relatorioProgresso(
   plano: Plano,
   feitos: SubFeito[],

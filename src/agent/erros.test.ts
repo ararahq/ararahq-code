@@ -51,7 +51,7 @@ describe("dicaLocaisErro", () => {
   test("aponta os locais e avisa pra não editar arquivo de nome parecido", () => {
     const dica = dicaLocaisErro("e: file:///x/FooTest.kt:10:1 No value passed for parameter 'bar'")
     expect(dica).toContain("/x/FooTest.kt:10")
-    expect(dica).toContain("presuma") // guardrail anti "erro no teste → edita o serviço"
+    expect(dica).toContain("presuma")
   })
 
   test("sem local achado, dica vazia (não atrapalha o diagnóstico normal)", () => {

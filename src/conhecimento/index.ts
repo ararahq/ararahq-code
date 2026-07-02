@@ -14,9 +14,6 @@ const F_PROJECT = "project.json"
 const F_SIMBOLOS = "simbolos.json"
 const F_GRAFO = "grafo.json"
 
-// Perfil de termos do CONTEÚDO do arquivo (1.2-conteúdo): top termos por frequência (Marques). É o que
-// liga o sintoma do leigo a um arquivo cujo BUG está numa constante/config/valor — coisa que o mapa de
-// símbolos (só classe/função) não enxerga. Persistido com o símbolo, recomputado só quando o arquivo muda.
 const MAX_TERMOS_ARQUIVO = 50
 
 type EntradaSimbolos = ArquivoSimbolos & { mtimeMs: number; hash: string; termos: [string, number][] }
@@ -27,7 +24,7 @@ export type Indice = {
   project: ProjectInfo
   simbolos: ArquivoSimbolos[]
   reverso: Record<string, string[]>
-  // arquivo -> top termos do conteúdo [termo, frequência]. Base do retrieval por termos (Camada 2).
+
   termos: Record<string, [string, number][]>
   grafo: Grafo
   grafoSerial: GrafoSerial
@@ -44,7 +41,6 @@ function topTermos(texto: string): [string, number][] {
     .slice(0, MAX_TERMOS_ARQUIVO)
 }
 
-/** Lê e extrai símbolos + perfil de termos de um arquivo. Degrada pra null (sem crashar) em erro de I/O. */
 async function processarArquivo(raiz: string, f: ArquivoFonte): Promise<EntradaSimbolos | null> {
   try {
     const texto = await Bun.file(`${raiz}/${f.caminho}`).text()
@@ -55,19 +51,12 @@ async function processarArquivo(raiz: string, f: ArquivoFonte): Promise<EntradaS
   }
 }
 
-/** Mapa arquivo -> termos do conteúdo, só dos arquivos presentes. Entradas de cache antigo (sem termos) viram []. */
 function mapaTermos(entradas: EntradaSimbolos[], presentes: Set<string>): Record<string, [string, number][]> {
   const out: Record<string, [string, number][]> = {}
   for (const e of entradas) if (presentes.has(e.arquivo)) out[e.arquivo] = e.termos ?? []
   return out
 }
 
-/**
- * Indexa o projeto (Camada 1). 1ª vez constrói tudo; nas seguintes só reprocessa arquivos cujo
- * mtime mudou (e confirma por hash de conteúdo) — os demais reusam o mapa simbólico em cache.
- * Sempre reconstrói o grafo a partir do mapa simbólico completo (O(símbolos), em memória, rápido).
- * Persiste project.json, simbolos.json e grafo.json. `force` reprocessa tudo do zero.
- */
 export async function indexar(raiz: string, opts: { force?: boolean } = {}): Promise<Indice> {
   const project = await detectarStack(raiz)
   const fontes = await listarFontes(raiz)
@@ -134,10 +123,6 @@ export async function indexar(raiz: string, opts: { force?: boolean } = {}): Pro
   }
 }
 
-/**
- * Carrega o índice persistido sem reprocessar arquivos. Retorna null se ainda não foi indexado.
- * Pra garantir frescor, o app chama `indexar` (que é barato no caminho incremental).
- */
 export async function carregarIndice(raiz: string): Promise<Indice | null> {
   const project = await lerJson<ProjectInfo | null>(raiz, F_PROJECT, null)
   if (!project) return null

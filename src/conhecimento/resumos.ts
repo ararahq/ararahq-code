@@ -5,7 +5,6 @@ const ARQUIVO = "resumos.json"
 export type Resumo = { resumo: string; hash: string }
 export type CacheResumos = Record<string, Resumo>
 
-/** Gera o resumo de UM arquivo a partir do seu conteúdo. Implementado pelo app quando há API key. */
 export type ResumirFn = (arquivo: string, conteudo: string) => Promise<string>
 
 export async function carregarResumos(raiz: string): Promise<CacheResumos> {
@@ -18,12 +17,6 @@ export async function salvarResumos(raiz: string, cache: CacheResumos): Promise<
 
 export type AlvoResumo = { arquivo: string; hash: string; conteudo: string }
 
-/**
- * Slot lazy de resumo por arquivo (1.4). NÃO gera nada sozinho: só roda quando o app passa uma
- * `ResumirFn` (que internamente chama o modelo barato — exige API key). Reusa o cache em disco e só
- * regenera quando o hash do arquivo mudou. Sem `modelFn`, é no-op que devolve o cache atual intacto.
- * `concorrencia` limita chamadas simultâneas ao modelo.
- */
 export async function gerarResumos(
   raiz: string,
   alvos: AlvoResumo[],

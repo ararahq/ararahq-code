@@ -1,13 +1,7 @@
 import type { RefResposta, RelatorioExecucao } from "../autonomo/tipos"
 
-// Resposta na origem: quando a tarefa termina, a Jade responde NA MESMA thread que disparou —
-// WhatsApp, canal do Slack/Discord, comentário na issue do Linear/Jira. Tokens de plataforma ficam
-// SÓ aqui no gateway (nunca entram no sandbox, onde roda código de terceiro). Best-effort com
-// timeout: falha de entrega loga estruturado e não derruba nada.
-
 const TIMEOUT_MS = 10_000
 
-/** Mensagem final honesta por estado. Pura/testável. */
 export function montarMensagemResultado(rel: RelatorioExecucao, prUrl: string | null): string {
   if (rel.estado === "verde" && prUrl) {
     return `✅ Pronto — build verde. PR: ${prUrl}\n\n${rel.resposta.slice(0, 1200)}`
@@ -116,7 +110,7 @@ export async function responderNaOrigem(ref: RefResposta, texto: string, env = p
         return false
       }
       const auth = Buffer.from(`${email}:${token}`).toString("base64")
-      // Jira Cloud API v3 exige o corpo em ADF (Atlassian Document Format)
+
       return post(
         `${base.replace(/\/$/, "")}/rest/api/3/issue/${ref.issueKey}/comment`,
         {

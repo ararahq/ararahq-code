@@ -1,9 +1,6 @@
 import type { TarefaNormalizada } from "../../autonomo/tipos"
 import { ehObjeto, ehString, separarRepo } from "../texto"
 
-// Discord (interactions): PING (type 1) responde PONG; slash command /jade (type 2) vira tarefa.
-// A resposta final vai pro CANAL via bot token (interaction token expira em 15min — curto demais).
-
 export const DISCORD_PING = 1
 export const DISCORD_COMANDO = 2
 

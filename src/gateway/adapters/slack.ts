@@ -1,9 +1,6 @@
 import type { TarefaNormalizada } from "../../autonomo/tipos"
 import { separarRepo } from "../texto"
 
-// Slack: slash command `/jade <dono/repo:> <instrução>` (payload form-encoded). dedupeKey usa o
-// trigger_id, único por invocação — retry de entrega do Slack não duplica tarefa.
-
 export function extrairSlack(corpoForm: string): TarefaNormalizada[] {
   const p = new URLSearchParams(corpoForm)
   const texto = (p.get("text") ?? "").trim()

@@ -5,15 +5,9 @@ import { ativarHeadless } from "../terminal/ui"
 import type { ParteImagem } from "../agent/imagem"
 import type { EstadoExecucao, RelatorioExecucao } from "./tipos"
 
-// Executor autônomo — a Fase 1 do Devin-mode. Envelopa a máquina já provada (processar(): roteamento,
-// maestro, test-gate, recovery) num contrato headless: entra uma instrução, sai um RelatorioExecucao.
-// Nada interativo acontece aqui: ativarHeadless() garante que stdin nunca é lido e que comando
-// perigoso é negado automaticamente (sem humano, não roda).
-
 const MAX_DIFF = 60_000
 const TIMEOUT_DIFF_MS = 20_000
 
-/** Mapeia (desfecho do agente, nº de edições) -> estado do relatório. Puro/testável. */
 export function derivarEstado(desfecho: Desfecho | null, editados: number): EstadoExecucao {
   if (!desfecho) return "erro"
   if (editados === 0) return "sem-mudanca"
@@ -21,7 +15,7 @@ export function derivarEstado(desfecho: Desfecho | null, editados: number): Esta
   if (desfecho.gate === "vermelho") return "vermelho"
   if (desfecho.gate === "pre-existente") return "pre-existente"
   if (desfecho.gate === "indeterminado") return "indeterminado"
-  return "sem-gate" // "ambiente" incluso: a mudança pode estar certa, mas não dá pra provar aqui
+  return "sem-gate"
 }
 
 function msgErro(e: unknown): string {
@@ -29,10 +23,6 @@ function msgErro(e: unknown): string {
   return m.length > 300 ? `${m.slice(0, 300)}…` : m
 }
 
-/**
- * Roda UMA tarefa de ponta a ponta, sem TTY, e devolve o relatório honesto: estado do portão de
- * build, resposta final do agente, arquivos editados e o diff. Nunca lança — erro vira estado "erro".
- */
 export async function executarTarefa(instrucao: string, imagens: ParteImagem[] = []): Promise<RelatorioExecucao> {
   ativarHeadless()
   const inicio = Date.now()
@@ -51,7 +41,7 @@ export async function executarTarefa(instrucao: string, imagens: ParteImagem[] =
   const editados = arquivosEditados()
   let diff = ""
   if (editados.length) {
-    // git diff cobre os arquivos rastreados; arquivo CRIADO (untracked) aparece só na lista de editados.
+
     diff = (await rodar("git diff", undefined, TIMEOUT_DIFF_MS)).saida.slice(0, MAX_DIFF)
   }
   return {

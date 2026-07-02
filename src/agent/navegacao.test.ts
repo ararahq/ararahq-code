@@ -29,7 +29,7 @@ describe("navegação — ações servidas do índice (fixture refund)", () => {
     const indice = await indexar(FIX("refund"), { force: true })
     const ep = entrypoints(indice, 12)
     expect(ep.length).toBeGreaterThan(0)
-    // LedgerService é chamado pelo webhook → tem grau de entrada, aparece no mapa.
+
     expect(ep.some((e) => e.arquivo.includes("LedgerService"))).toBe(true)
   })
 
@@ -43,7 +43,7 @@ describe("navegação — ações servidas do índice (fixture refund)", () => {
     const indice = await indexar(FIX("refund"), { force: true })
     const arq = indice.simbolos.find((s) => s.arquivo.includes("StatusWebhookService"))!.arquivo
     expect(simbolosDe(indice, arq).length).toBeGreaterThan(0)
-    // o webhook injeta `LedgerService` e chama `refund` — ambos def única → liga, mesmo same-package.
+
     const viz = vizinhosArquivo(indice, arq)
     expect(viz.some((v) => v.arquivo.includes("LedgerService"))).toBe(true)
   })
@@ -77,7 +77,7 @@ describe("navegação — explorar alcança via grafo (o que retrieval lexical n
   test("grep num termo + salto de grafo alcança o arquivo vizinho ausente", async () => {
     const raiz = FIX("refund")
     const indice = await indexar(raiz, { force: true })
-    // termo casa o webhook; o LedgerService é alcançado pelo salto de call-graph, não por lexico do ticket.
+
     const alc = await explorar(raiz, indice, "", { termos: ["processStatusUpdate"], hops: 2 })
     expect(alc.some((a) => a.arquivo.includes("LedgerService"))).toBe(true)
     const via = alc.find((a) => a.arquivo.includes("LedgerService"))!.via
@@ -99,7 +99,7 @@ describe("navegação — cache de conteúdo (mtime-validado)", () => {
     const arq = "f.txt"
     writeFileSync(`${dir}/${arq}`, "a\nb\nc")
     expect((await ler(dir, arq, 1, 999))?.linhas).toEqual(["a", "b", "c"])
-    // edita + força mtime futuro (resolução de mtime do FS pode ser grossa) → deve invalidar o cache.
+
     writeFileSync(`${dir}/${arq}`, "x\ny")
     const futuro = new Date(Date.now() + 5000)
     utimesSync(`${dir}/${arq}`, futuro, futuro)
@@ -113,7 +113,7 @@ describe("navegação — ranquearCandidatos (locator do gate de custo)", () => 
   test("termo que casa nome de símbolo rankeia o arquivo no topo, com flag estrutural", async () => {
     const raiz = FIX("refund")
     const indice = await indexar(raiz, { force: true })
-    // `refund` e `ledger` casam símbolo/nome do LedgerService → topo + estrutural=true (sinal de confiança).
+
     const r = await ranquearCandidatos(raiz, indice, ["refund", "ledger"])
     expect(r.length).toBeGreaterThan(0)
     expect(r[0].arquivo).toContain("LedgerService")

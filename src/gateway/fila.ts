@@ -1,10 +1,6 @@
 import { Database } from "bun:sqlite"
 import type { RefResposta, TarefaNormalizada } from "../autonomo/tipos"
 
-// Fila durável do gateway (SQLite): webhook enfileira, despachante consome, resultado conclui.
-// dedupe_key UNIQUE mata retry agressivo de provider (Meta/Slack retentam) sem lógica extra.
-// Estados: pendente -> rodando -> concluida | falhou.
-
 export type EstadoFila = "pendente" | "rodando" | "concluida" | "falhou"
 
 export type TarefaFila = TarefaNormalizada & { id: number; estado: EstadoFila }
@@ -46,7 +42,6 @@ export class Fila {
     this.db.exec(SCHEMA)
   }
 
-  /** Enfileira; retorna false se o dedupe_key já existia (retry do provider — ignora em silêncio). */
   enfileirar(t: TarefaNormalizada): boolean {
     const r = this.db.run(
       `INSERT OR IGNORE INTO tarefas (dedupe_key, origem, repo, instrucao, autor, resposta_ref)
@@ -56,7 +51,6 @@ export class Fila {
     return r.changes > 0
   }
 
-  /** Pega a próxima pendente e marca rodando, atomicamente (uma tarefa nunca sai pra dois workers). */
   proxima(): TarefaFila | null {
     const linha = this.db
       .query<Linha, []>(

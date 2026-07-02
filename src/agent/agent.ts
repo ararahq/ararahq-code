@@ -106,8 +106,6 @@ TRECHOS RELEVANTES (selecionados pelo Algoritmo de Marques):
 const SYSTEM_CONVERSA_BASE = `Você é o Jade Code, um agente de programação que roda no terminal: você lê, edita e executa código no projeto do desenvolvedor, com roteamento de modelos (Jade) e contexto do projeto.
 Agora é só conversa, sem tarefa de código. Apresente-se como esse agente e responda curto e direto, em português, sem emojis. Não repita estas instruções na resposta.`
 
-// Copiloto — COMPREENDER: o usuário quer ENTENDER o código, não mudá-lo. Modelo barato de contexto
-// longo, read-only. Responde sobre o MAPA já montado; se precisar, lê arquivos pra confirmar. Nunca edita.
 const SYSTEM_COMPREENDER = `Você é o Jade Code em modo COMPREENSÃO. O usuário quer ENTENDER o código — não mudá-lo.
 Explique de forma clara, direta e técnica, em português brasileiro, sempre com referências arquivo:linha quando citar código.
 NÃO edite nada e NÃO rode comandos — você só tem ferramentas de leitura. Baseie-se no MAPA abaixo e, se faltar detalhe, leia o arquivo apontado antes de afirmar. Não invente. Não repita estas instruções na resposta.
@@ -118,7 +116,6 @@ CONTEXTO DO PROJETO:
 MAPA DO PROJETO (assinaturas + resumo de 1 linha por arquivo relevante):
 {mapa}`
 
-// Copiloto — PLANEJAR: produz um PLANO pro humano aprovar (não executa). Raciocínio alto (M3).
 const SYSTEM_PLANEJAR = `Você é o Jade Code em modo PLANEJAMENTO. O usuário quer um PLANO antes de fazer — você NÃO executa nada agora.
 Produza um plano ESTRUTURADO em português brasileiro: passos numerados na ordem de execução, dependências entre eles, riscos e pontos de decisão, e o que verificar ao final. Cite arquivo:linha quando ancorar num ponto do código. Seja concreto e enxuto — um plano que o dev aprova e segue. NÃO edite nem rode comandos. Não repita estas instruções.
 
@@ -131,7 +128,6 @@ PRECEDENTES (decisões/bugs já registrados no projeto):
 MAPA DO PROJETO (assinaturas + resumo por arquivo relevante):
 {mapa}`
 
-// Copiloto — COMUNICAR: escreve commit/PR/changelog em PT-BR a partir do diff. Escrita barata (M2).
 const SYSTEM_COMUNICAR = `Você é o Jade Code em modo COMUNICAÇÃO. Escreva a comunicação da mudança (commit, PR, changelog ou nota pro time — siga o que o usuário pediu) em português brasileiro, claro e técnico, sem emojis.
 Destaque o que IMPORTA (a mudança central) e omita ruído (cosmético, formatação). Baseie-se SÓ no diff abaixo — não invente o que não está nele. Se for mensagem de commit, uma linha de assunto curta + corpo só se necessário. Não repita estas instruções.
 
@@ -150,13 +146,8 @@ function montarSistema(memoria: string, plano: string, contexto: string, skills 
 
 const historico: Msg[] = []
 
-// Imagens da tarefa atual (multimodal). Setadas no início de processar(), anexadas à última mensagem
-// de usuário em cada passada. Vazias entre tarefas (só texto). O histórico permanente guarda só texto.
 let _imagensTarefa: ParteImagem[] = []
 
-// Desfecho estruturado da última tarefa — o contrato do modo headless (executor autônomo lê isso
-// depois de processar() pra montar o relatório sem parsear texto). `gate` é o estado do portão de
-// build; null = a tarefa morreu em erro/abort antes de concluir.
 export type GateFinal = "verde" | "vermelho" | "ambiente" | "sem-gate" | "pre-existente" | "indeterminado"
 export type Desfecho = { resposta: string; gate: GateFinal }
 let _desfecho: Desfecho | null = null
@@ -168,7 +159,7 @@ function registrarDesfecho(resposta: string, gate: GateFinal): void {
 }
 
 let _abort: AbortController | null = null
-/** Cancela a tarefa em andamento. Retorna true se havia o que cancelar (senão, o REPL trata como sair). */
+
 export function cancelar(): boolean {
   if (_abort && !_abort.signal.aborted) {
     _abort.abort()
@@ -205,12 +196,6 @@ type ConfigPassada = {
   extra?: Msg[]
 }
 
-/**
- * Uma passada completa de streaming com o modelo. Honra abort + spinner + streaming + gating
- * por plano. Reusada tanto na 1ª chamada quanto na 2ª passada da escalada (D5).
- * `extra` injeta mensagens só nesta chamada (a resposta da passada anterior, na escalada),
- * sem sujar o histórico permanente.
- */
 async function executarPassada(cfg: ConfigPassada): Promise<ResultadoPassada> {
   const { model, sistema, toolset, plano, thinking, passoRef, extra } = cfg
   let erroCapturado: unknown = null
@@ -228,11 +213,9 @@ async function executarPassada(cfg: ConfigPassada): Promise<ResultadoPassada> {
     abortSignal: ac.signal,
     providerOptions: thinking ? { openrouter: { reasoning: { effort: "medium" } } } : undefined,
     prepareStep: ({ stepNumber }) => {
-      // 4.3-coerência: reinjeta escopo permitido + arquivos já editados em TODA passada, pra o
-      // modelo não esquecer o alvo nem derivar pra fora ao longo de um loop comprido.
+
       const sis = sistema + notaEscopo()
-      // Alarme de trajetória longa: passou do teto de passos sem fechar. Para de empilhar, manda
-      // resumir e devolver — não roda até o teto cego (MAX_ITERACOES).
+
       if (trajetoriaLonga(stepNumber, false)) {
         return {
           activeTools: ["ler_arquivo", "editar_arquivo"] as (keyof typeof toolset)[],
@@ -323,28 +306,21 @@ function fazerConcluirPasso(plano: Passo[], passoRef: { atual: number }) {
   })
 }
 
-/** A última resposta do agente fez uma verificação que falhou? Gatilho pra avaliar escalada. */
 function ultimaVerificouEFalhou(resposta: string): boolean {
   return /exit\s+[1-9]/.test(resposta) || /falh|erro de compila|build failed|test.*fail/i.test(resposta)
 }
 
-/**
- * 4.1 — Roda o portão de build do subprojeto tocado (comando vindo do project.json da Camada 1).
- * Aplica contorno de ambiente (Java incompatível) UMA vez se o build cuspir esse erro. Devolve
- * true (verde), false (vermelho) ou null (sem build determinável — não há portão a aplicar, aceita).
- */
 type ResultadoGate =
   | { estado: "sem-gate" }
   | { estado: "verde" }
   | { estado: "vermelho"; novas: string[] }
-  | { estado: "pre-existente"; preExistentes: string[] } // vermelho, mas SÓ por falhas que já existiam
-  | { estado: "indeterminado"; naoAtribuiveis: string[] } // baseline não compilava: não dá pra atribuir
+  | { estado: "pre-existente"; preExistentes: string[] }
+  | { estado: "indeterminado"; naoAtribuiveis: string[] }
   | { estado: "ambiente"; mensagem: string }
 
-/** Classifica um build vermelho contra o baseline: falha que já existia não é culpa da edição. */
 function classificarVermelho(saida: string): ResultadoGate {
   const base = baselineAtual()
-  if (!base) return { estado: "vermelho", novas: [] } // sem baseline capturado: comportamento antigo
+  if (!base) return { estado: "vermelho", novas: [] }
   const v = compararComBaseline(base, saida)
   if (v.tipo === "sem-piora") return { estado: "pre-existente", preExistentes: v.preExistentes.map(rotuloFalha) }
   if (v.tipo === "indeterminado") return { estado: "indeterminado", naoAtribuiveis: v.naoAtribuiveis.map(rotuloFalha) }
@@ -375,7 +351,6 @@ async function rodarTestGate(): Promise<ResultadoGate> {
   return { estado: "verde" }
 }
 
-/** Estado do desfecho a partir do resultado do portão. */
 function mapaGateFinal(gate: ResultadoGate): GateFinal {
   switch (gate.estado) {
     case "verde": return "verde"
@@ -387,7 +362,6 @@ function mapaGateFinal(gate: ResultadoGate): GateFinal {
   }
 }
 
-/** Sufixo honesto anexado à resposta conforme o veredito do portão. Vazio quando verde/sem-gate. */
 function sufixoGate(gate: ResultadoGate): string {
   if (gate.estado === "ambiente") return `\n\n[Jade] ${gate.mensagem}`
   if (gate.estado === "pre-existente")
@@ -405,11 +379,6 @@ function sufixoGate(gate: ResultadoGate): string {
   return ""
 }
 
-/**
- * Nota de escopo/edições reinjetada no system a cada passo (4.3-coerência). Lembra o modelo de quais
- * arquivos pode tocar (e de NÃO derivar) e o que já editou. Vazia quando o escopo é livre e nada foi
- * editado — não polui execução autônoma sem alvo definido.
- */
 function notaEscopo(): string {
   const escopo = escopoAtual()
   const editados = arquivosEditados()
@@ -428,14 +397,9 @@ type FaseDiagnostico =
   | { ok: false; motivo: "abortado" }
   | { ok: false; motivo: "erro"; erro: unknown }
   | { ok: false; motivo: "naoCravou"; texto: string; modelos: string[]; tokens: number; custoUSD: number; ms: number }
-  // Cravou, mas FORA do alvo que o usuário apontou (e sem conexão de import com ele) — fuga de alvo.
-  // Quem chama responde honesto (montarRespostaForaDoAlvo) em vez de executar no lugar errado.
+
   | { ok: false; motivo: "foraDoAlvo"; texto: string; foraDoAlvo: string[]; modelos: string[]; tokens: number; custoUSD: number; ms: number }
 
-/**
- * Ancoragem no alvo citado (bug de sintoma): a prosa do pedido aponta um componente que casa arquivo
- * real do repo? Determinístico (Marques + basenames, sem modelo). Best-effort: falha => null (livre).
- */
 async function ancorarAlvoDoRepo(input: string): Promise<AlvoAncorado | null> {
   try {
     const fontes = await listarFontes(process.cwd())
@@ -445,7 +409,6 @@ async function ancorarAlvoDoRepo(input: string): Promise<AlvoAncorado | null> {
   }
 }
 
-/** Lê um arquivo-fonte relativo à raiz (pro veredito de conexão por import). Ausente/fora => null. */
 async function lerTextoFonte(arquivo: string): Promise<string | null> {
   if (arquivo.startsWith("/")) return null
   try {
@@ -457,12 +420,6 @@ async function lerTextoFonte(arquivo: string): Promise<string | null> {
   }
 }
 
-/**
- * Fase 1 do pipeline de diagnóstico (M3): UMA passada de raciocínio sobre o material já reunido,
- * com a cadeia de fallback INVISÍVEL (Gemini -> GPT-5.5 -> Opus). Se cravar, define o escopo (4.3) e
- * devolve a tarefa mastigada pra Fase 2 executar. Usada pelo modo diagnóstico E pela reclassificação
- * dinâmica (3.5). O usuário só vê "Jade raciocinando".
- */
 async function diagnosticarEMastigar(
   input: string,
   openrouter: (slug: string) => Modelo,
@@ -500,8 +457,7 @@ async function diagnosticarEMastigar(
     return { ok: false, motivo: "naoCravou", texto: diag.texto, modelos: diag.modelosUsados, tokens, custoUSD: diag.custoUSD, ms: Date.now() - inicio }
   }
   logInterno(`diagnostico cravou modelo=${diag.modelo} rodadas=${diag.rodadas}`)
-  // Gate de ancoragem: cravou FORA do alvo apontado (e desconectado dele por import) = fuga de alvo.
-  // Não executa um conserto que o usuário não pediu — devolve pro chamador responder honesto.
+
   if (alvo) {
     const veredito = await diagnosticoAncoraNoAlvo(alvo, diag.texto, lerTextoFonte)
     if (!veredito.ancorado) {
@@ -509,7 +465,7 @@ async function diagnosticarEMastigar(
       return { ok: false, motivo: "foraDoAlvo", texto: diag.texto, foraDoAlvo: veredito.foraDoAlvo, modelos: diag.modelosUsados, tokens, custoUSD: diag.custoUSD, ms: Date.now() - inicio }
     }
   }
-  // Escopo: os arquivos da causa + o alvo apontado (a edição pode precisar tocar o próprio alvo).
+
   const escopoDiag = escopoDoDiagnostico(diag.texto)
   definirEscopo(alvo ? escopoDeArquivos([...escopoDiag.arquivos, ...alvo.arquivos]) : escopoDiag)
   logInterno(`escopo=[${[...escopoAtual().arquivos].join(", ")}]`)
@@ -517,7 +473,6 @@ async function diagnosticarEMastigar(
   return { ok: true, tarefa, texto: diag.texto, modelos: diag.modelosUsados, tokens, custoUSD: diag.custoUSD, ms: Date.now() - inicio }
 }
 
-/** Complexo = o roteador escolheu a marcha de loop longo (tamanho/escopo grande). */
 function ehComplexo(decisao: ReturnType<typeof rotear>): boolean {
   return decisao.modelo === MODELOS.loopLongo
 }
@@ -526,14 +481,6 @@ const N_CANDIDATOS_TTC = 3
 
 type ResultadoTTC = { ok: boolean; texto: string; tokens: number; custoUSD: number }
 
-/**
- * 3.4 — Test-time compute: o diagnóstico difícil (com comparação pareada) NÃO cravou na 1ª passada.
- * Em vez de desistir, gera N candidatos EM PARALELO (raciocínio puro, sem efeito colateral) e
- * SELECIONA POR VERIFICAÇÃO: aplica o fix de cada candidato (serial — mexe no disco) e roda o build;
- * o primeiro que fecha VERDE ganha, os perdedores são revertidos (Backup). Só entra aqui (material
- * com par) porque multiplica o custo. Cada candidato roda numa Camada 4 limpa (resetCamada4) pra os
- * trackers de edição não contaminarem um attempt com o outro. O usuário vê só "Jade".
- */
 async function tentarTestTimeCompute(
   input: string,
   openrouter: ReturnType<typeof provedor>,
@@ -605,9 +552,8 @@ async function tentarTestTimeCompute(
 
 const CTX_TRECHO = 4
 
-/** Lê ±CTX_TRECHO linhas ao redor de uma linha de erro (numeradas). Path relativo à raiz; absoluto/ausente → null. */
 async function lerTrecho(arquivo: string, linha: number): Promise<string | null> {
-  if (arquivo.startsWith("/")) return null // fora da raiz: não lê arquivo arbitrário do disco
+  if (arquivo.startsWith("/")) return null
   try {
     const f = Bun.file(`${process.cwd()}/${arquivo}`)
     if (!(await f.exists())) return null
@@ -620,15 +566,6 @@ async function lerTrecho(arquivo: string, linha: number): Promise<string | null>
   }
 }
 
-/**
- * Grounding-por-build (degrau 1 do "olha antes de decidir"): tarefa "faça o build/teste passar" roda
- * o gate do projeto UMA vez ANTES de qualquer plano, extrai o arquivo:linha EXATO que o compilador
- * aponta e vira execução cirúrgica (barato implementa sobre material aterrado, escopo = arquivos
- * apontados). Mata os dois modos de falha medidos: o Maestro decompondo a frase crua no escuro, e o
- * diagnóstico ancorando no nome do tipo em vez do arquivo que não compila. Devolve true se tratou;
- * false se não é tarefa de build, não há gate determinável, ou o erro não tem local extraível (aí o
- * caminho normal assume — não força âncora que não existe).
- */
 async function consertarBuildAterrado(
   input: string,
   openrouter: ReturnType<typeof provedor>,
@@ -666,7 +603,7 @@ async function consertarBuildAterrado(
     finalizarAbort()
     return true
   }
-  if (!at) return false // sem âncora clara → caminho normal (diagnóstico) assume
+  if (!at) return false
 
   if (at.tipo === "ja-verde") {
     const msg = "[Jade] rodei o build/teste do projeto e ele já está VERDE — não há nada a consertar."
@@ -681,8 +618,6 @@ async function consertarBuildAterrado(
     return true
   }
 
-  // Baseline gate: as falhas do build ANTES de editar. Falha que persistir e já estava aqui não é
-  // culpa da Jade (o caso medido: o teste do controller já falhava pelo WIP do usuário).
   registrarBaseline(at.saida)
   definirEscopo(escopoDeArquivos(at.arquivos))
   logInterno(`grounding-build: aterrado em [${at.arquivos.join(", ")}]`)
@@ -716,8 +651,7 @@ async function consertarBuildAterrado(
   }
 
   let gate = await rodarTestGate()
-  // Só tenta consertar se a edição introduziu falha NOVA (vermelho). Falha pré-existente não é da
-  // Jade — não fica martelando o que já estava quebrado antes de tocar.
+
   if (gate.estado === "vermelho") {
     const rFix = await executarPassada({
       model: openrouter(MODELOS.execucao) as Modelo,
@@ -768,13 +702,6 @@ async function consertarBuildAterrado(
   return true
 }
 
-/**
- * Maestro — orquestração de tarefa complexa. Decompõe (modelo forte, 1 passada) em sub-objetivos e
- * roda CADA UM na máquina provada (diagnóstico opcional + execução + portão de build), com escopo e
- * orçamento de passos próprios, fazendo checkpoint entre eles. Para honesto com o progresso salvo se
- * um sub-objetivo travar. Devolve true se tratou a tarefa; false se a decomposição foi atômica/falhou
- * (aí o chamador segue o caminho normal de 1 passada). O usuário vê só "Jade" + o plano + o progresso.
- */
 async function orquestrarComplexo(
   input: string,
   openrouter: ReturnType<typeof provedor>,
@@ -792,7 +719,7 @@ async function orquestrarComplexo(
     finalizarAbort()
     return true
   }
-  if (!dec || !valeOrquestrar(dec.plano)) return false // atômico/falhou -> caminho normal de 1 passada
+  if (!dec || !valeOrquestrar(dec.plano)) return false
 
   const plano = dec.plano
   logInterno(`maestro decompôs em ${plano.subobjetivos.length} sub-objetivos`)
@@ -911,13 +838,8 @@ export async function processar(input: string, imagens: ParteImagem[] = []) {
   _imagensTarefa = imagens
   const ctx = await carregarContexto()
 
-  // 3.7 — roteamento index-first: o índice da Camada 1 (se já existe) confirma referências de código
-  // reais no input, de forma agnóstica de extensão. Sem índice, rotear cai no padrão. Leitura barata
-  // (JSON persistido, sem reprocessar arquivos).
   const indiceRota = await carregarIndice(process.cwd())
 
-  // 3.0 herança de contexto: seguimento curto depois de um diagnóstico que cravou aplica AQUELE
-  // diagnóstico (execução guiada sobre o mastigado guardado), em vez de re-rotear input vazio.
   const heranca = pareceSeguimento(input) && Boolean(mastigadoAnterior())
   const decisao = heranca
     ? { modo: "execucao" as Modo, thinking: false, modelo: MODELOS.execucao, motivo: "heranca-diagnostico" }
@@ -927,7 +849,6 @@ export async function processar(input: string, imagens: ParteImagem[] = []) {
   const conversa = modo === "conversa"
   logInterno(`rota motivo=${decisao.motivo} modo=${modo}`)
 
-  // 3.6 — input com intenções demais numa frase só: não roteia às cegas; pede pra quebrar.
   if (decisao.pedirQuebra) {
     ui.jade(rotuloModo(modo))
     ui.aviso("essa tarefa junta várias intenções numa frase só.")
@@ -935,13 +856,11 @@ export async function processar(input: string, imagens: ParteImagem[] = []) {
     return
   }
 
-  // Conversa roda local e grátis no Ollama, quando disponível.
   if (conversa) {
     await processarConversa(input, ctx, decisao.modelo)
     return
   }
 
-  // Copiloto — capacidades de LEITURA (não mexem no código): explicar, planejar, comunicar.
   if (modo === "compreender") {
     await processarCompreender(input, ctx, decisao.modelo)
     return
@@ -966,9 +885,6 @@ export async function processar(input: string, imagens: ParteImagem[] = []) {
 
   ui.jade(rotuloModo(modo))
 
-  // Skills: ativação DETERMINÍSTICA (Marques, zero modelo) das instruções especializadas instaladas
-  // (Claude/projeto/outras) que casam com a tarefa. Progressive disclosure — só o corpo da skill que
-  // casou entra no prompt. Degrada com graça: skill é auxiliar, falha aqui não derruba a tarefa.
   let blocoSkills = ""
   try {
     const skillsAtivas = await selecionarSkills(input, process.cwd())
@@ -981,23 +897,16 @@ export async function processar(input: string, imagens: ParteImagem[] = []) {
     logInterno(`skills: falha ao ativar (${msgErro(e)})`)
   }
 
-  // Grounding-por-build (olha ANTES de decidir): tarefa "faça o build/teste passar" roda o gate uma
-  // vez, extrai o arquivo:linha exato do erro e vira execução cirúrgica — em vez de o Maestro
-  // decompor no escuro ou o diagnóstico ancorar no nome do tipo. Sem âncora, segue o caminho normal.
   if (!heranca) {
     const tratado = await consertarBuildAterrado(input, openrouter, ctx, blocoSkills)
     if (tratado) return
   }
 
-  // Tarefa COMPLEXA (marcha de loop longo): o Maestro decompõe em sub-objetivos e orquestra cada um
-  // na máquina provada, com checkpoint. Se a decomposição for atômica/falhar, segue o caminho normal.
   if (!heranca && ehComplexo(decisao)) {
     const tratado = await orquestrarComplexo(input, openrouter, ctx, blocoSkills)
     if (tratado) return
   }
 
-  // Pipeline de 2 fases. Diagnóstico raciocina UMA vez (caro, fora do loop) e entrega a correção
-  // mastigada pro modelo rápido executar — mata a latência do loop com thinking em cada passo.
   let plano: Passo[] = []
   const contextoCirurgico = ""
   let tarefa = input
@@ -1006,13 +915,11 @@ export async function processar(input: string, imagens: ParteImagem[] = []) {
   let tokensRaciocinio = 0
   let custoRaciocinio = 0
   let modelosDiag: string[] = []
-  // 1.5 — diagnóstico mastigado que cravou, guardado pra registrar o bug na memória se o build fechar.
+
   let diagTexto: string | null = null
 
   if (modo === "diagnostico") {
-    // Ancoragem no alvo citado: o usuário apontou um componente específico em prosa? A investigação
-    // ancora nele e o conserto TRAVA nele — sem isso, o modo de falha medido: concluir que o alvo
-    // está correto, consertar um componente parecido que ninguém pediu e declarar verde.
+
     const alvo = await ancorarAlvoDoRepo(input)
     if (alvo) {
       ui.subItem(`alvo apontado: ${alvo.arquivos.join(", ")}`)
@@ -1047,8 +954,7 @@ export async function processar(input: string, imagens: ParteImagem[] = []) {
         })
         return
       }
-      // naoCravou — 3.4 test-time compute antes de desistir: gera N candidatos em paralelo e aplica o
-      // que passa no build (seleção por verificação). Só fecha se UM verifica verde de verdade.
+
       const ttc = await tentarTestTimeCompute(input, openrouter, ctx, blocoSkills)
       if (ttc.ok) {
         const respostaTTC = `Cravei por verificação: gerei ${N_CANDIDATOS_TTC} hipóteses em paralelo e apliquei a que fechou o build.\n\n${ttc.texto}`
@@ -1056,7 +962,7 @@ export async function processar(input: string, imagens: ParteImagem[] = []) {
           await registrarBug(process.cwd(), montarRegistroBug(input, ttc.texto, arquivosEditados()))
           logInterno("memoria: bug registrado (test-time-compute)")
         } catch {
-          /* memória é auxiliar: não derruba o fluxo */
+
         }
         ui.linhaBranca()
         ui.resposta(respostaTTC)
@@ -1075,7 +981,7 @@ export async function processar(input: string, imagens: ParteImagem[] = []) {
         registrarDesfecho(respostaTTC, "verde")
         return
       }
-      // nem o test-time compute fechou — NÃO manda lixo pra execução. Falha honesta ao usuário.
+
       ui.aviso("não cravei a causa com confiança.")
       ui.subItem("me aponta a direção (ex: 'olha no PaymentService') que eu vou direto.")
       registrarDesfecho(
@@ -1102,8 +1008,7 @@ export async function processar(input: string, imagens: ParteImagem[] = []) {
     thinkingExec = false
     registrarMastigado(d.tarefa)
   } else if (heranca) {
-    // 3.0 — aplica o diagnóstico anterior: o mastigado guardado vira a tarefa, com o ajuste do
-    // usuário anexado. Escopo herdado do diagnóstico. Consome (não re-aplica no próximo seguimento).
+
     const anterior = mastigadoAnterior() as string
     tarefa = `${anterior}\n\nAjuste pedido pelo usuário agora: ${input}`
     definirEscopo(escopoDoDiagnostico(anterior))
@@ -1115,13 +1020,10 @@ export async function processar(input: string, imagens: ParteImagem[] = []) {
       ui.spinnerStop()
       if (plano.length) ui.plano(plano.map((p) => p.texto))
     }
-    // 4.3-ESCOPO em execução GUIADA: o escopo são os arquivos que o usuário citou no pedido. Sem
-    // citação => modo livre (escopoDoDiagnostico sem arquivo é livre), autonomia geral preservada.
+
     const escopoInput = escopoDoDiagnostico(input)
     definirEscopo(escopoInput)
-    // Ancoragem no alvo em EXECUÇÃO: "conserta o X do modal de feedback" roteia pra cá (imperativo),
-    // e sem trava a edição fica livre pra "consertar" um componente parecido que ninguém pediu.
-    // Só pra CONSERTO com alvo em prosa (feature nova não trava — pode criar arquivo à vontade).
+
     if (escopoInput.livre && pareceBugDeSintoma(input)) {
       const alvoExec = await ancorarAlvoDoRepo(input)
       if (alvoExec) {
@@ -1169,11 +1071,6 @@ export async function processar(input: string, imagens: ParteImagem[] = []) {
     return
   }
 
-  // 3.5 — reclassificação dinâmica: uma execução que NÃO editou nada e devolveu hedge era, na real,
-  // um diagnóstico disfarçado. Pivota pro pipeline de diagnóstico (sem recomeçar) e executa o
-  // mastigado. Se nem assim cravar, mantém a resposta honesta original.
-  // 3.5 — só reclassifica se ainda há orçamento de troca de marcha (teto 3, ou o teto global 6 — o
-  // que vier primeiro). Estourou? Mantém a resposta honesta original em vez de oscilar de natureza.
   if (deveReclassificarPraDiagnostico(modo, houveEdicao(), respostaFinal) && podeTrocarMarcha()) {
     registrarTrocaMarcha()
     modoFinal = "diagnostico"
@@ -1214,7 +1111,7 @@ export async function processar(input: string, imagens: ParteImagem[] = []) {
       ui.erro(msgErro(d.erro))
       return
     } else if (d.motivo === "foraDoAlvo" && alvoRe) {
-      // Fuga de alvo na reclassificação: não executa o mastigado — a resposta final vira a honesta.
+
       tokensRaciocinio += d.tokens
       custoRaciocinio += d.custoUSD
       modelosDiag = d.modelos
@@ -1222,9 +1119,6 @@ export async function processar(input: string, imagens: ParteImagem[] = []) {
     }
   }
 
-  // Escalada por test-time compute (3.4): só quando a verificação ainda está vermelha E o tracker
-  // marcou escalada pendente (3 erros de código no mesmo ponto). subirEsforco gradua: primeiro mais
-  // thinking no MESMO modelo (barato), só depois troca de marcha. Automático — o usuário não precisa pedir.
   let esforco: Esforco = { modelo: modeloAtual, thinking: thinkingExec }
   while (escaladaPendente() && !estourouTeto() && ultimaVerificouEFalhou(respostaFinal)) {
     const proximo = subirEsforco(esforco)
@@ -1258,13 +1152,10 @@ export async function processar(input: string, imagens: ParteImagem[] = []) {
     }
   }
 
-  // 4.1 TEST-GATE + 4.3-coerência (trajetória longa): se a tarefa editou código, o build do
-  // subprojeto tocado PRECISA passar antes de aceitar. Vermelho => UMA passada de conserto guiada
-  // (com instrução de só consertar, nada de edit novo). Determinístico: não depende do modelo lembrar.
   let gateFinal: GateFinal = "sem-gate"
   if (precisaTestGate(houveEdicao())) {
     let g = await rodarTestGate()
-    // Só conserta se a edição introduziu falha NOVA. Pré-existente (baseline) não é culpa da Jade.
+
     if (g.estado === "vermelho") {
       ui.aviso("build vermelho após a edição — consertando antes de fechar.")
       const rGate = await executarPassada({
@@ -1297,9 +1188,6 @@ export async function processar(input: string, imagens: ParteImagem[] = []) {
     respostaFinal += sufixoGate(g)
   }
 
-  // 1.5 — fix de diagnóstico verificado (build verde): registra o bug resolvido na memória do projeto
-  // (sintoma -> causa raiz -> arquivo:linha -> correção). Alimenta buscarPrecedente nas próximas tarefas.
-  // Degrada com graça: memória é serviço auxiliar — falhar aqui NÃO derruba a tarefa que já fechou.
   if (gateFinal === "verde" && modoFinal === "diagnostico" && diagTexto) {
     try {
       await registrarBug(process.cwd(), montarRegistroBug(input, diagTexto, arquivosEditados()))
@@ -1309,8 +1197,6 @@ export async function processar(input: string, imagens: ParteImagem[] = []) {
     }
   }
 
-  // Trava de escopo (4.3): se o modelo tentou tocar pontos parecidos fora do escopo, não some com
-  // isso — fecha a rodada LISTANDO os candidatos e perguntando, em vez de corrigir por conta.
   const candidatos = candidatosForaEscopo()
   if (candidatos.length) {
     respostaFinal =
@@ -1331,7 +1217,7 @@ export async function processar(input: string, imagens: ParteImagem[] = []) {
   const custo = custoUSD(modeloAtual, totalIn, totalOut) + custoRaciocinio
   const tokens = totalIn + totalOut + tokensRaciocinio
   const houveThinking = thinkingExec || esforco.thinking || modoFinal === "diagnostico"
-  // Métricas na tela: tokens/custo/tempo. O modelo usado fica por tarefa no ~/.arara/custo.json (/custo).
+
   ui.metricas(tokens, custo, Date.now() - inicio)
   const modeloInterno =
     modoFinal === "diagnostico"
@@ -1446,12 +1332,6 @@ async function processarConversa(input: string, ctx: { resumo: string }, modeloC
   registrarDesfecho(resposta, "sem-gate")
 }
 
-/**
- * Streamer compartilhado das capacidades de LEITURA do copiloto (compreender/planejar/comunicar): o
- * `sistema` já vem com o contexto reunido (mapa + corpos / diff). UMA passada, SEM ferramentas — nunca
- * edita nem executa, e não entra em loop de exploração (que fazia o modelo gastar o orçamento lendo e
- * terminar sem responder). Honra abort, stream e custo. O chamador já mostrou ui.jade.
- */
 async function streamLeitura(
   input: string,
   modo: Modo,
@@ -1543,8 +1423,6 @@ async function streamLeitura(
 
 const MAX_CORPOS_COMPREENDER = 5
 
-/** Copiloto — COMPREENDER: mapa amplo + CORPOS dos arquivos mais relevantes, explica em PT-BR. UMA
- * passada (contexto pré-reunido, sem loop de ferramentas — senão o modelo explora e some sem responder). */
 async function processarCompreender(input: string, ctx: { completo: string }, modeloCloud: string): Promise<void> {
   ui.jade("entendendo")
   ui.spinnerStart("Jade entendendo")
@@ -1555,7 +1433,6 @@ async function processarCompreender(input: string, ctx: { completo: string }, mo
   await streamLeitura(input, "compreender", "entendendo", modeloCloud, sistema, false)
 }
 
-/** Copiloto — PLANEJAR: mapa amplo + precedentes (1.5), raciocínio (M3), produz o plano. "Jade · planejando". */
 async function processarPlanejar(input: string, ctx: { completo: string }, modeloCloud: string): Promise<void> {
   ui.jade("planejando")
   ui.spinnerStart("Jade planejando")
@@ -1571,14 +1448,12 @@ async function processarPlanejar(input: string, ctx: { completo: string }, model
   const sistema = SYSTEM_PLANEJAR.replace("{memoria_projeto}", ctx.completo || "(sem memória registrada)")
     .replace("{precedentes}", precTexto)
     .replace("{mapa}", mapa.texto || "(índice vazio)")
-  // UMA passada (doc): o contexto já veio reunido (mapa amplo + precedentes). SEM loop de ferramentas —
-  // senão o modelo gasta o orçamento explorando e termina no preâmbulo, sem entregar o plano.
+
   await streamLeitura(input, "planejar", "planejando", modeloCloud, sistema, true)
 }
 
 const MAX_CHARS_DIFF = 14_000
 
-/** Copiloto — COMUNICAR: pega o diff, ranqueia por Marques, escreve commit/PR/changelog PT-BR (M2). "Jade · escrevendo". */
 async function processarComunicar(input: string, modeloCloud: string): Promise<void> {
   ui.jade("escrevendo")
   ui.spinnerStart("Jade escrevendo")
@@ -1604,7 +1479,6 @@ function finalizarAbort() {
   historico.pop()
 }
 
-/** Rótulo do cabeçalho da tarefa: o MODO em pt-BR (o modelo por tarefa fica no /custo). */
 function rotuloModo(modo: string): string {
   if (modo === "diagnostico") return "diagnóstico"
   if (modo === "conversa") return "conversa"
@@ -1614,10 +1488,6 @@ function rotuloModo(modo: string): string {
   return "execução"
 }
 
-/**
- * Log de depuração (marcha, escalada, escopo). Não polui o stdout da resposta — vai pra stderr,
- * só sob ARARA_DEBUG=1. A trilha do modelo por tarefa fica no custo.json (/custo).
- */
 function logInterno(msg: string): void {
   if (process.env.ARARA_DEBUG === "1") process.stderr.write(`[jade] ${msg}\n`)
 }

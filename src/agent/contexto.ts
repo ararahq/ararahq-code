@@ -5,17 +5,6 @@ import { gerarResumos, type CacheResumos, type ResumirFn, type AlvoResumo } from
 import { listarFontes, type ArquivoFonte } from "../conhecimento/walk"
 import { extrairEntidades, ehGenerico, perfilTermos, expandirDominio } from "../engine/marques"
 
-// Camada 2 — Montagem de Contexto (determinística, via índice da Camada 1).
-//
-// Substitui o gather por GREP do diagnóstico por um gather por ÍNDICE/GRAFO. Entidades do sintoma
-// resolvem a símbolos-semente pelo índice reverso; o grafo (campo `chama` já materializado) acha os
-// métodos que operam sobre a MESMA família de repositório e os pareia quando divergem na chamada
-// específica. O modelo de raciocínio recebe um PACOTE preciso: MAPA + TRECHOS CIRÚRGICOS (corpos dos
-// métodos, não arquivos inteiros) + COMPARAÇÃO PAREADA (vinda do grafo) + PRECEDENTES da memória.
-//
-// 2.4 (subagente de busca com janela LLM separada) está ADIADO: o índice determinístico cobre a
-// maior parte do ganho. Quando o índice vier fraco, o caminho degrada pro gather antigo por grep.
-
 const MIN_TOKEN_ENTIDADE = 4
 const MAX_SEMENTES = 60
 const MAX_ARQUIVOS_FOCO = 6
@@ -26,24 +15,17 @@ const MAX_PARES = 4
 const MAX_MAPA = 14
 const MIN_SIMBOLOS_PRA_INDICE = 2
 
-/** Termos distintivos do sintoma (sem genéricos como number/message). Caem pro conjunto cru se vazio. */
 function entidadesEspecificas(input: string): string[] {
   const todas = extrairEntidades(input)
   const especificas = todas.filter((e) => !ehGenerico(e) && e.length >= MIN_TOKEN_ENTIDADE)
   return especificas.length ? especificas : todas.filter((e) => e.length >= MIN_TOKEN_ENTIDADE)
 }
 
-/** Um nome de símbolo casa a entidade se a contém como substring (isShared casa "shared"). */
 function nomeCasaEntidade(nome: string, entidades: string[]): boolean {
   const low = nome.toLowerCase()
   return entidades.some((e) => low.includes(e))
 }
 
-/**
- * Símbolos-semente: definições cujo NOME casa um termo do sintoma (via índice, não grep). Pega
- * creditLedger/isSettled/findByStatus... O nome que não cita a entidade (processStatusUpdate)
- * entra depois, pela expansão do grafo no mesmo arquivo.
- */
 function resolverSementes(indice: Indice, entidades: string[]): Simbolo[] {
   const out: Simbolo[] = []
   for (const arq of indice.simbolos) {
@@ -57,16 +39,13 @@ function resolverSementes(indice: Indice, entidades: string[]): Simbolo[] {
 
 const RE_REPO_INTERFACE = /Repository|Repositorio|Dao\b/
 
-/** Arquivo de interface de repositório (Spring Data): só declarações sem corpo — pareá-las dá ruído. */
 function ehRepoInterface(arquivo: string): boolean {
   return RE_REPO_INTERFACE.test(arquivo.split("/").pop() ?? "")
 }
 
-// Sinais de RUÍDO num monorepo: o sintoma de domínio casa nomes em UI, código gerado, SDK e teste —
-// que NÃO são o ponto onde a operação acontece. Afunda esses no ranking do foco.
 const RE_RUIDO_FOCO =
   /\.(tsx|jsx)$|\/gen\/|\.gen\.|\/packages\/(ui|tui|opencode|core|sdk)\/|\/test\/|\/tests\/|\/__tests__\/|\.test\.|\.spec\.|\/node_modules\//
-// Arquivo onde a lógica de domínio vive (service/handler/controller): é onde a operação diverge.
+
 const RE_SERVICE = /Service|Handler|Controller|UseCase|Manager|Resolver|Job|Worker|Processor/
 
 const PESO_NOME_ARQUIVO = 3
@@ -78,12 +57,6 @@ type FocoCand = { arquivo: string; sementes: number; opsSemente: number; nomeCas
 
 const RE_OP_REPO = /^findFirst|^findAll|^findBy|^find[A-Z]|save|delete|update/
 
-/**
- * Rankeia os arquivos das sementes por relevância de DOMÍNIO (não por ordem de varredura). O sinal
- * forte vem do grafo: arquivo de serviço cuja semente já chama uma operação de repositório é onde a
- * divergência mora (processStatusUpdate/creditLedger). Num monorepo, contagem de nome sozinha enterra
- * o serviço backend sob telas de UI que citam "ledger" — por isso o peso pesado vai pra ops+service.
- */
 export type ModoFoco = "cirurgico" | "amplo"
 
 function rankearFoco(indice: Indice, entidades: string[], modo: ModoFoco = "cirurgico"): FocoCand[] {
@@ -116,24 +89,17 @@ function scoreFoco(c: FocoCand, modo: ModoFoco = "cirurgico"): number {
   if (c.nomeCasa) s += PESO_NOME_ARQUIVO
   if (c.service) s += PESO_SERVICE
   if (c.opsSemente > 0) s += PESO_OP_NA_SEMENTE
-  // Cirúrgico afunda ruído (UI/gen/teste) pra achar o ponto do bug. Amplo (compreender) NÃO penaliza:
-  // cobertura > precisão — o panorama quer ver as telas e o gerado também, não só o service.
+
   if (c.ruido && modo === "cirurgico") s += PESO_RUIDO
   return s
 }
 
 const MIN_CORPO_METODO = 3
-// Callee curto demais (get, of, to, run) não distingue operação — ignora no pareamento.
+
 const MIN_LEN_CALLEE = 4
 
 type ChamadaOp = { metodo: string; arquivo: string; linha: number; chamada: string }
 
-/**
- * Coleta TODAS as chamadas dos métodos com corpo nos arquivos-foco (via grafo, campo `chama`).
- * GENÉRICO: não filtra por idioma de framework (nada de "findBy"/"save" do JPA chumbado) — pega o que
- * o código de fato chama. O que é "comparável" o pareamento decide pela SIMILARIDADE entre os callees
- * do próprio projeto, não por uma lista de operações conhecida. Roda igual em qualquer stack/domínio.
- */
 function chamadasDeOperacao(indice: Indice, arquivosFoco: Set<string>): ChamadaOp[] {
   const out: ChamadaOp[] = []
   for (const arq of indice.simbolos) {
@@ -157,7 +123,6 @@ export type ParGrafo = {
   score: number
 }
 
-/** Maior sufixo comum (case-insensitive): mede "mesma intenção de query" (ambas ...IsActiveTrue). */
 function sufixoComum(x: string, y: string): string {
   const a = x.toLowerCase()
   const b = y.toLowerCase()
@@ -166,7 +131,6 @@ function sufixoComum(x: string, y: string): string {
   return a.slice(a.length - i)
 }
 
-/** Maior prefixo comum (case-insensitive), em nº de chars. */
 function prefixoComum(x: string, y: string): number {
   const a = x.toLowerCase()
   const b = y.toLowerCase()
@@ -175,11 +139,6 @@ function prefixoComum(x: string, y: string): number {
   return i
 }
 
-/**
- * Similaridade 0..1 entre dois identificadores: quanto do maior é coberto por prefixo+sufixo comum.
- * Mede "variantes da MESMA intenção" sem conhecer o domínio: findX vs findXSemDono, buscaConta vs
- * buscaContaAtiva, getUser vs getUserById. É o sinal universal que substitui as famílias JPA chumbadas.
- */
 function similaridade(x: string, y: string): number {
   const max = Math.max(x.length, y.length)
   if (!max) return 0
@@ -188,14 +147,6 @@ function similaridade(x: string, y: string): number {
 
 const MIN_SIM_OPERACAO = 0.5
 
-/**
- * Score do par (a peça que faz o modelo cravar), 100% GENÉRICO — nada de domínio ou framework:
- * - intra-arquivo (métodos irmãos): base +4.
- * - nomes dos métodos parecidos (irmãos que deviam agir igual): +0..4 pela similaridade.
- * - callees são variantes próximas da mesma operação: +0..4 pela similaridade.
- * - relevância ao sintoma: +3 se o nome de um método casa um termo da query (derivado da query,
- *   não uma lista de negócio). Roda igual na Arara ou em qualquer outro código.
- */
 function pontuarPar(a: ChamadaOp, b: ChamadaOp, entidades: string[]): number {
   let s = 4
   s += Math.round(similaridade(a.metodo, b.metodo) * 4)
@@ -204,24 +155,14 @@ function pontuarPar(a: ChamadaOp, b: ChamadaOp, entidades: string[]): number {
   return s
 }
 
-/** Gera todos os pares (i<j) de uma lista. */
 function* combinar<T>(xs: T[]): Generator<[T, T]> {
   for (let i = 0; i < xs.length; i++) {
     for (let j = i + 1; j < xs.length; j++) yield [xs[i], xs[j]]
   }
 }
 
-/**
- * Comparação pareada por GRAFO (substitui o pareamento por regex/grep). Agrupa as chamadas de
- * operação por família e pareia, dentro do MESMO arquivo, métodos distintos que divergem na chamada
- * específica (deveriam buscar igual, mas não). Ordena por score; desempata pela diferença de
- * qualificação (genérico vs específico), que põe o par de maior contraste no topo. Determinístico,
- * sem LLM. Vazio se não há divergência clara — aí o gather degrada pro grep.
- */
 export function parearPorGrafo(chamadas: ChamadaOp[], entidades: string[]): ParGrafo[] {
-  // GENÉRICO: pareia métodos irmãos (mesmo arquivo) cujos callees são VARIANTES da mesma operação
-  // (similaridade >= limiar) mas divergem — "deviam fazer igual, mas um faz diferente". O que conta
-  // como "mesma operação" sai da similaridade entre os nomes reais do projeto, não de lista chumbada.
+
   const candidatos: ParGrafo[] = []
   for (const [a, b] of combinar(chamadas)) {
     if (a.arquivo !== b.arquivo || a.metodo === b.metodo || a.chamada === b.chamada) continue
@@ -248,8 +189,6 @@ export function parearPorGrafo(chamadas: ChamadaOp[], entidades: string[]): ParG
   return out
 }
 
-// Sinal 2 — guardas estruturais UNIVERSAIS (qualquer linguagem/domínio): construções que protegem um
-// fluxo. Divergência nelas entre métodos que tocam a mesma coisa = "um trata, o outro esquece".
 const GUARDAS: { nome: string; re: RegExp }[] = [
   { nome: "try/catch", re: /\b(try|catch|rescue|except|finally)\b/i },
   { nome: "transação", re: /transaction|transactional|\brollback\b|\bcommit\b/i },
@@ -266,15 +205,9 @@ function featuresGuarda(corpo: string): Set<string> {
 
 const RE_CATCH = /\bcatch\b|\bexcept\b|\brescue\b/i
 const RE_RELANCA = /\b(throw|raise|rethrow)\b/i
-// Verbos de PERSISTÊNCIA universais (save/insert/update...). Não inclui "create"/"add" (ambíguos:
-// createAlert/addListener não escrevem estado). É o que distingue escrita de notificação/leitura.
+
 const RE_WRITE_CALLEE = /^(save|persist|insert|update|delete|upsert|store|merge|flush|write)/i
 
-/**
- * "Engole erro em volta de escrita": o método tem catch, escreve estado (chama um callee de
- * persistência) e o catch NÃO relança — o erro do write some silenciosamente. Anti-padrão UNIVERSAL
- * (qualquer linguagem/banco): perda de dado/dinheiro sem alarme. Não conhece domínio nem framework.
- */
 export function engoleEmVoltaDeWrite(corpo: string, callees: string[]): boolean {
   if (!RE_CATCH.test(corpo)) return false
   if (!callees.some((c) => RE_WRITE_CALLEE.test(c))) return false
@@ -285,13 +218,6 @@ export function engoleEmVoltaDeWrite(corpo: string, callees: string[]): boolean 
 
 const LINHAS_ANOTACAO = 3
 
-/**
- * Sinal 2 (guarda): pareia métodos irmãos que tocam a MESMA coisa (compartilham ≥1 callee) mas
- * divergem numa GUARDA estrutural — um tem try/catch, transação, checagem de nulo ou dedupe que o
- * outro não tem. Universal: nenhum termo de domínio/framework. Lê o corpo (com as anotações acima da
- * assinatura) dos métodos do foco. Pega bug de fluxo (rollback que engole, falta de idempotência) que
- * o Sinal 1 (variante de chamada) não enxerga.
- */
 async function parearPorGuarda(
   raiz: string,
   indice: Indice,
@@ -325,12 +251,11 @@ async function parearPorGuarda(
       const comum = a.callees.find((c) => c.length >= MIN_LEN_CALLEE && b.callees.includes(c))
       if (!comum) continue
       const diff = [...a.features].filter((x) => !b.features.has(x)).concat([...b.features].filter((x) => !a.features.has(x)))
-      // Divergência: ou um engole erro em volta de escrita e o outro não (sinal forte de bug de fluxo),
-      // ou diferem numa guarda estrutural. Sem nenhuma das duas, não é par.
+
       const engoleDiverge = a.engoleWrite !== b.engoleWrite
       if (!engoleDiverge && !diff.length) continue
       let score = 4 + diff.length * 2 + Math.round(similaridade(a.metodo, b.metodo) * 2)
-      if (engoleDiverge) score += 6 // engolir o erro de um WRITE é o anti-padrão que mais causa bug silencioso
+      if (engoleDiverge) score += 6
       if (entidades.some((e) => a.metodo.toLowerCase().includes(e) || b.metodo.toLowerCase().includes(e))) score += 3
       candidatos.push({
         familia: engoleDiverge ? "guarda (um engole o erro de uma escrita, o outro não)" : `guarda (${diff.join(", ")})`,
@@ -344,7 +269,6 @@ async function parearPorGuarda(
   return candidatos.sort((x, y) => y.score - x.score).slice(0, MAX_PARES)
 }
 
-/** Renderiza os pares como bloco fechado pra injetar ANTES dos trechos no pacote da M3. */
 function renderPares(pares: ParGrafo[], rotulo: string): string {
   if (!pares.length) return ""
   const arq = (a: ChamadaOp) => a.arquivo.split("/").pop() ?? a.arquivo
@@ -363,11 +287,6 @@ function renderPares(pares: ParGrafo[], rotulo: string): string {
 
 type Trecho = { arquivo: string; metodo: string; inicio: number; fim: number; corpo: string }
 
-/**
- * Extrai os CORPOS dos métodos relevantes (não arquivos inteiros) pelos ranges linhaInicio/linhaFim
- * do índice, com `arquivo:linha`. Prioriza os métodos que aparecem nos pares; completa com sementes.
- * Cap de linhas por trecho e de chars total pra não estourar o contexto.
- */
 async function extrairTrechos(
   raiz: string,
   alvos: { arquivo: string; metodo: string; inicio: number; fim: number }[],
@@ -393,24 +312,18 @@ async function extrairTrechos(
       chars += corpo.length
       out.push({ arquivo: alvo.arquivo, metodo: alvo.metodo, inicio: ini, fim, corpo })
     } catch {
-      // arquivo ilegível: ignora, segue com os demais
+
     }
   }
   return out
 }
 
-/** Renderiza os trechos cirúrgicos com cabeçalho arquivo:linha por método. */
 function renderTrechos(trechos: Trecho[]): string {
   if (!trechos.length) return ""
   const blocos = trechos.map((t) => `### ${t.arquivo}:${t.inicio} — ${t.metodo}()\n${t.corpo}`)
   return `TRECHOS CIRÚRGICOS (corpos dos métodos do par + vizinhança causal):\n\n${blocos.join("\n\n")}`
 }
 
-/**
- * Mapa de 1 linha por símbolo relevante (assinatura). Orienta o modelo sem despejar arquivo inteiro.
- * 1.4 — na PRIMEIRA aparição de cada arquivo, anexa o resumo de 1 linha (gerado pelo modelo barato,
- * cacheado) quando há um — dá "o que este arquivo faz" sem o código. Sem resumo, cai só na assinatura.
- */
 function renderMapa(simbolos: Simbolo[], resumos: CacheResumos): string {
   if (!simbolos.length) return ""
   const vistos = new Set<string>()
@@ -433,7 +346,6 @@ function renderMapa(simbolos: Simbolo[], resumos: CacheResumos): string {
   return `MAPA (símbolos relevantes ao sintoma):\n${linhas.join("\n")}`
 }
 
-/** Monta os alvos de resumo (1.4) dos arquivos-foco: lê conteúdo + hash pra gerarResumos cachear. */
 async function alvosResumo(raiz: string, arquivos: string[]): Promise<AlvoResumo[]> {
   const out: AlvoResumo[] = []
   for (const arquivo of arquivos) {
@@ -441,13 +353,12 @@ async function alvosResumo(raiz: string, arquivos: string[]): Promise<AlvoResumo
       const conteudo = await Bun.file(`${raiz}/${arquivo}`).text()
       out.push({ arquivo, hash: Bun.hash(conteudo).toString(16), conteudo })
     } catch {
-      // arquivo ilegível: ignora — o mapa cai na assinatura pra ele
+
     }
   }
   return out
 }
 
-/** Renderiza os precedentes da memória (1.5) que casam o sintoma. Vazio se não houver. */
 function renderPrecedentes(precedentes: Precedente[]): string {
   if (!precedentes.length) return ""
   const blocos = precedentes.map((p) => {
@@ -470,8 +381,7 @@ export type PacoteContexto = {
   precedentes: Precedente[]
   texto: string
   forte: boolean
-  // Material veio da SUPERFÍCIE ESCOPADA (SDK pequeno inteiro), não de um par preciso. O gate de
-  // escalada usa isso: superfície é contexto BOM (pode escalar 1x), mas não é o par (sweet spot).
+
   escopado: boolean
 }
 
@@ -481,7 +391,6 @@ const MAX_CHARS_SUPERFICIE = 24_000
 const MIN_TOKEN_ESCOPO = 3
 const MIN_ANALOGOS_CROSS = 3
 
-/** Quantos basenames os dois subtrees compartilham — mede se são PARES (SDKs irmãos) vs coisas díspares. */
 function analogosCompartilhados(fontes: ArquivoFonte[], a: string, b: string): number {
   const bn = (st: string) =>
     new Set(fontes.filter((f) => f.caminho.startsWith(`${st}/`)).map((f) => basenameSemExt(f.caminho)))
@@ -492,8 +401,6 @@ function analogosCompartilhados(fontes: ArquivoFonte[], a: string, b: string): n
   return n
 }
 
-// Arquivos que mais provavelmente contêm o bug (config/cliente/http/base/entrypoint) vêm primeiro;
-// testes por último. Resolve os bugs "scan-de-literal" (base_url, import morto) sem depender de linguagem.
 const RE_ARQUIVO_PRIORITARIO = /\b(config|settings|client|http|base|index|resources?|api|connection|conn|setup|constants|main)\b|__init__/i
 const RE_ARQUIVO_TESTE = /test|spec|__tests__|\.test\.|\.spec\./i
 
@@ -511,13 +418,6 @@ function basenameSemExt(caminho: string): string {
   return (i > 0 ? base.slice(0, i) : base).toLowerCase()
 }
 
-/**
- * Escopos citados — AGNÓSTICO de linguagem. Casa os tokens do sintoma contra a ÁRVORE REAL do
- * projeto (nomes de pasta), não contra uma lista de linguagens. "python" escopa porque existe
- * `arara-python-sdk` e o token bate; `auth`/`billing`/`zig-sdk` num projeto qualquer funcionam igual,
- * sem nada chumbado. Devolve até 2 subtrees (caminho relativo) — 2 = cross-compare ("X quebra, Y ok").
- * Ordenado pela posição no texto (o sujeito da queixa primeiro). Vazio se nenhum token casar a árvore.
- */
 export async function escoposCitados(raiz: string, input: string, fontes: ArquivoFonte[]): Promise<string[]> {
   const baixo = input.toLowerCase()
   const tokens = [...new Set(extrairEntidades(input).map((t) => t.toLowerCase()).filter((t) => t.length >= MIN_TOKEN_ESCOPO))]
@@ -536,7 +436,7 @@ export async function escoposCitados(raiz: string, input: string, fontes: Arquiv
     let score = 0
     let pos = Infinity
     for (const tok of tokens) {
-      // só "o segmento da pasta contém o token" — NÃO o contrário, senão "cliente" casa "cli".
+
       if (segs.some((s) => s.includes(tok))) {
         score++
         pos = Math.min(pos, baixo.indexOf(tok))
@@ -545,8 +445,7 @@ export async function escoposCitados(raiz: string, input: string, fontes: Arquiv
     if (score > 0) cands.push({ st, score, pos })
   }
   if (!cands.length) return []
-  // mais tokens casados primeiro; empate -> caminho MAIS CURTO (o repo vence o subdir, pra cross-compare
-  // ser repo-vs-repo e o manifesto da raiz entrar); depois posição no texto.
+
   cands.sort((a, b) => b.score - a.score || a.st.length - b.st.length || a.pos - b.pos)
 
   const escolhidos: { st: string; pos: number }[] = []
@@ -556,17 +455,13 @@ export async function escoposCitados(raiz: string, input: string, fontes: Arquiv
     if (escolhidos.length >= 2) break
   }
   const ordenados = escolhidos.sort((a, b) => a.pos - b.pos).map((e) => e.st)
-  // cross-compare só entre PARES (SDKs irmãos, com arquivos análogos suficientes). Senão — ex.: SDK
-  // pequeno casado junto com o backend gigante por causa de um token genérico ("api") — escopa só no
-  // primeiro citado (o sujeito da queixa), pra não comparar coisas díspares nem estourar o orçamento.
+
   if (ordenados.length === 2 && analogosCompartilhados(fontes, ordenados[0], ordenados[1]) < MIN_ANALOGOS_CROSS) {
     return [ordenados[0]]
   }
   return ordenados
 }
 
-/** Arquivos de texto pequenos na RAIZ de um subtree (manifestos: pyproject/package.json/go.mod/etc),
- * agnóstico — pega o que estiver lá, sem lista chumbada. É o ponto C: deixa o modelo ver a versão/contrato. */
 async function manifestosDaRaiz(raiz: string, st: string): Promise<string[]> {
   try {
     const entradas = await readdir(`${raiz}/${st}`, { withFileTypes: true })
@@ -576,13 +471,6 @@ async function manifestosDaRaiz(raiz: string, st: string): Promise<string[]> {
   }
 }
 
-/**
- * Superfície escopada: o sintoma aponta um (ou dois) subtree e o índice não casou um ponto preciso.
- * Em vez de lixo, entrega o subtree PEQUENO INTEIRO pro modelo escanear — "ver todos os arquivos da
- * pasta". Inclui os MANIFESTOS da raiz (C: versão/contrato à vista). Com DOIS subtrees vira
- * COMPARAÇÃO (A): prioriza os arquivos análogos (mesmo basename nos dois) e marca pra o modelo achar
- * o que DIVERGE — é o par cross-repo, o ponto forte da arquitetura aplicado a SDKs. Agnóstico.
- */
 async function superficieEscopada(
   raiz: string,
   subtrees: string[],
@@ -595,7 +483,7 @@ async function superficieEscopada(
   if (!grupos.length) return null
 
   const tokens = [...new Set(extrairEntidades(input).map((t) => t.toLowerCase()).filter((t) => t.length >= 3))]
-  // arquivo cujo NOME casa um token do sintoma ("template" -> Templates.php) é o suspeito nº1.
+
   const bonusToken = (caminho: string) => (tokens.some((t) => basenameSemExt(caminho).includes(t)) ? 15 : 0)
 
   const cross = grupos.length >= 2
@@ -608,7 +496,7 @@ async function superficieEscopada(
     }
   }
   const bonusAnalogo = (caminho: string) => ((contagem.get(basenameSemExt(caminho)) ?? 0) >= 2 ? 30 : 0)
-  // Manifesto entra com peso médio (vê versão/contrato) mas NÃO atropela o arquivo do bug (token/config).
+
   const score = (caminho: string, manifesto: boolean) =>
     (manifesto ? 8 : prioridadeArquivo(caminho)) + bonusToken(caminho) + bonusAnalogo(caminho)
 
@@ -638,7 +526,7 @@ async function superficieEscopada(
         chars += numeradas.length
         charsGrupo += numeradas.length
       } catch {
-        // arquivo ilegível: ignora
+
       }
     }
   }
@@ -649,11 +537,6 @@ async function superficieEscopada(
   return { texto: `${cab}\n\n${blocos.join("\n\n")}`, arquivos }
 }
 
-/**
- * Símbolos do mapa: os métodos que entraram nos pares (cobre processStatusUpdate, que o nome não cita) +
- * as sementes dos ARQUIVOS-FOCO. Sementes de UI/gen fora do foco não entram — o mapa orienta o
- * modelo pro código de domínio, não pra telas que só citam a entidade.
- */
 function simbolosDoMapa(indice: Indice, sementes: Simbolo[], pares: ParGrafo[], foco: Set<string>): Simbolo[] {
   const porChave = new Map<string, Simbolo>()
   const add = (s: Simbolo) => porChave.set(`${s.arquivo}#${s.nome}`, s)
@@ -670,11 +553,6 @@ function igualLado(s: Simbolo, arquivo: string, p: ParGrafo): boolean {
   return (s.nome === p.a.metodo && arquivo === p.a.arquivo) || (s.nome === p.b.metodo && arquivo === p.b.arquivo)
 }
 
-/**
- * Alvos de trecho: PRIMEIRO os métodos dos pares (a vizinhança causal exata — o A vs B), depois as
- * sementes que estão nos ARQUIVOS-FOCO (relevância de domínio). Mantém os corpos cirúrgicos focados
- * no service onde a divergência mora, sem gastar orçamento com componentes de UI fora do foco.
- */
 function alvosDeTrecho(
   indice: Indice,
   sementes: Simbolo[],
@@ -696,35 +574,23 @@ function alvosDeTrecho(
   return alvos
 }
 
-// --- Retrieval por TERMOS (Marques) — a ponte sintoma-leigo -> arquivo, determinística e grátis ----
-
 const MAX_FOCO_TERMOS = 6
 
-/** Superfície de busca de um arquivo (sem reler do disco): caminho + nomes de símbolo + assinaturas. */
 function textoIndexadoDoArquivo(a: ArquivoSimbolos): string {
   const simbolos = a.simbolos.map((s) => `${s.nome} ${s.assinatura}`).join(" ")
   return `${a.arquivo.replace(/[/.]/g, " ")} ${simbolos}`
 }
 
-/**
- * Ranqueia os arquivos do índice por relevância ao sintoma usando o Marques: casa os termos do
- * pedido (expandidos via ponte de domínio PT→EN, aterrada no vocabulário REAL do projeto) contra o
- * perfil de frequência de cada arquivo. É o caminho que acha o arquivo quando o nome do símbolo NÃO
- * casa a palavra do leigo ("recarga/saldo" -> addCredit). Zero token. Penaliza ruído (UI/test/gen).
- */
 function rankearPorTermos(indice: Indice, input: string): { arquivo: string; score: number }[] {
   const vocab = new Set<string>()
   const perfis = indice.simbolos.map((a) => {
-    // Perfil do CONTEÚDO (indexado na Camada 1) — pega constante/config/valor que o nome de símbolo
-    // não tem. Cai pro perfil de símbolos só se o índice for antigo (sem termos de conteúdo).
+
     const conteudo = indice.termos[a.arquivo]
     const perfil = conteudo?.length ? new Map(conteudo) : perfilTermos(textoIndexadoDoArquivo(a))
     for (const k of perfil.keys()) vocab.add(k)
     return { arquivo: a.arquivo, perfil }
   })
-  // Recall: usa os termos COMPLETOS do sintoma (perfilTermos), não a lista podada de entidades — que
-  // joga "crédito" fora como genérico e deixa o desabafo do leigo crowdar os termos úteis. Soma os
-  // sinônimos PT->EN das entidades, expande pela ponte de domínio e aterra no vocab real do projeto.
+
   const tokens = [...new Set([...perfilTermos(input).keys(), ...extrairEntidades(input)])]
   const q = expandirDominio(tokens, vocab).filter((t) => t.length >= MIN_TOKEN_ESCOPO)
   if (!q.length) return []
@@ -747,8 +613,6 @@ function rankearPorTermos(indice: Indice, input: string): { arquivo: string; sco
   return out.sort((x, y) => y.score - x.score)
 }
 
-/** Despeja o conteúdo dos arquivos escolhidos pelo retrieval (cap de linhas/chars). O modelo lê e
- * aponta arquivo:linha. Usado quando o índice não montou par nem subtree, mas os termos acharam alvo. */
 export async function superficieDeArquivos(
   raiz: string,
   arquivos: string[],
@@ -765,7 +629,7 @@ export async function superficieDeArquivos(
       usados.push(caminho)
       chars += numeradas.length
     } catch {
-      // arquivo ilegível: ignora
+
     }
   }
   if (!usados.length) return null
@@ -775,14 +639,6 @@ export async function superficieDeArquivos(
   }
 }
 
-/**
- * Monta o pacote de contexto do diagnóstico via índice da Camada 1. Garante o índice fresco
- * (incremental, barato), resolve sementes pelo reverso, pareia por grafo, extrai os corpos cirúrgicos
- * e injeta precedentes da memória. `forte` indica se o índice resolveu o bastante; quando fraco, quem
- * chama degrada pro gather antigo por grep. Reusável: o mesmo pacote alimenta todos os modelos da
- * cadeia de fallback sem recomputar I/O. O ÚNICO toque de modelo é 1.4 (resumo BARATO de 1 linha por
- * arquivo-foco, cacheado por hash — 1x por arquivo) quando `resumir` é passado; sem ele, lê só o cache.
- */
 export async function montarPacote(
   raiz: string,
   input: string,
@@ -796,24 +652,18 @@ export async function montarPacote(
     return pacoteFraco(entidades, precedentes)
   }
 
-  // Escopo AGNÓSTICO por árvore real: casa os tokens do sintoma contra as pastas que existem ("python"
-  // -> arara-python-sdk; "auth" -> pasta auth; sem lista de linguagens). Restringe a busca ao(s)
-  // subtree(s) citado(s) — dois = comparação cross-repo ("X quebra, Y funciona").
   const fontes = await listarFontes(raiz)
   const subtrees = await escoposCitados(raiz, input, fontes)
   const noEscopo = (arquivo: string) =>
     subtrees.length === 0 || subtrees.some((st) => arquivo === st || arquivo.startsWith(`${st}/`))
 
   const sementes = resolverSementes(indice, entidades).filter((s) => noEscopo(s.arquivo))
-  // Foco rankeado por relevância de domínio (service backend + operação no grafo > telas de UI que
-  // só citam a entidade). Cap pra não pagar custo num monorepo onde "shared" aparece em dezenas de
-  // lugares. Sem isso, o arquivo-mãe afunda sob ruído de frontend e o par certo nunca é montado.
+
   let focoLista = rankearFoco(indice, entidades)
     .filter((c) => noEscopo(c.arquivo))
     .slice(0, MAX_ARQUIVOS_FOCO)
     .map((c) => c.arquivo)
-  // Sintoma leigo: o casamento estrito de NOME não achou foco. O retrieval por termos (Marques) DEFINE
-  // o foco a partir do conteúdo — e o pareamento roda sobre ele (não vira só dump de superfície).
+
   if (!focoLista.length && subtrees.length === 0) {
     focoLista = rankearPorTermos(indice, input)
       .filter((r) => noEscopo(r.arquivo))
@@ -824,9 +674,7 @@ export async function montarPacote(
 
   const chamadas = chamadasDeOperacao(indice, foco)
   const paresChamada = parearPorGrafo(chamadas, entidades)
-  // Sinal 2 (guarda): irmãos que tocam a mesma coisa mas divergem numa GUARDA universal (engolir o erro
-  // de uma escrita, try/catch, transação, nulo, dedupe). Pega bug de fluxo que o Sinal 1 (variante de
-  // chamada) não vê. Roda SEMPRE e mescla ORDENANDO por score — o sinal mais forte vence, não a ordem.
+
   const paresGuarda = await parearPorGuarda(raiz, indice, foco, entidades)
   const pares: ParGrafo[] = []
   const vistosPar = new Set<string>()
@@ -838,9 +686,6 @@ export async function montarPacote(
     if (pares.length >= MAX_PARES) break
   }
 
-  // Sem par preciso, mas o sintoma aponta um subtree? Entrega o subtree pequeno INTEIRO (superfície
-  // escopada) pro modelo escanear — resolve bug de literal/config sem símbolo (base_url, import morto),
-  // e com DOIS subtrees vira comparação cross-repo. Contexto bom (forte), mas não é o par (escopado).
   if (pares.length === 0 && subtrees.length > 0) {
     const sup = await superficieEscopada(raiz, subtrees, fontes, input)
     if (sup) {
@@ -858,8 +703,6 @@ export async function montarPacote(
     }
   }
 
-  // Sem par, mas há foco (estrito ou por termos): dump da superfície dos arquivos achados pro modelo
-  // escanear e apontar arquivo:linha. O foco do sintoma leigo (por termos) já foi resolvido acima.
   if (pares.length === 0 && focoLista.length > 0) {
     const sup = await superficieDeArquivos(raiz, focoLista)
     if (sup) {
@@ -879,7 +722,7 @@ export async function montarPacote(
 
   const rotulo = entidades[0] ?? "a entidade"
   const mapaSimbolos = simbolosDoMapa(indice, sementes, pares, foco)
-  // 1.4 — resumos de 1 linha dos arquivos-foco (cacheados por hash; só gera no cache miss e se há fn).
+
   const resumos = await gerarResumos(raiz, await alvosResumo(raiz, focoLista), resumir)
   const trechos = await extrairTrechos(raiz, alvosDeTrecho(indice, sementes, pares, foco))
 
@@ -891,8 +734,7 @@ export async function montarPacote(
   ].filter(Boolean)
 
   const texto = blocos.join("\n\n").slice(0, MAX_CHARS_PACOTE)
-  // Forte = o índice resolveu material de verdade: pelo menos um par OU trechos cirúrgicos de >= 2
-  // símbolos casados. Senão, o sintoma não casou o código pelo nome — degrada pro grep.
+
   const forte = pares.length > 0 || (sementes.length >= MIN_SIMBOLOS_PRA_INDICE && trechos.length > 0)
 
   return {
@@ -928,7 +770,6 @@ const MAX_SIMBOLOS_POR_ARQ = 6
 
 export type MapaAmplo = { texto: string; arquivos: string[] }
 
-/** Arquivos com mais símbolos (os "centrais") — panorama quando nenhuma entidade do pedido casa. */
 function arquivosCentrais(indice: Indice): string[] {
   return [...indice.simbolos]
     .filter((a) => a.simbolos.length > 0)
@@ -936,13 +777,6 @@ function arquivosCentrais(indice: Indice): string[] {
     .map((a) => a.arquivo)
 }
 
-/**
- * Camada 2 em modo AMPLO (copiloto — COMPREENDER): em vez do trecho cirúrgico do bug, monta um
- * PANORAMA — muitos arquivos relevantes com suas assinaturas + o resumo de 1 linha (1.4, cacheado).
- * Cobertura sobre precisão, SEM corpos (compreender é volume de leitura, não insight). Alimenta o
- * modelo barato de contexto longo. Sem entidade casando ("visão geral do projeto"), cai pros arquivos
- * com mais símbolos. Determinístico; o único toque de modelo é o resumo barato (via `resumir`), cacheado.
- */
 export async function montarMapaAmplo(
   raiz: string,
   input: string,

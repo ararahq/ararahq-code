@@ -6,13 +6,6 @@ import { hmacSha256Hex } from "../gateway/assinatura"
 import { indexar } from "../conhecimento"
 import type { RelatorioExecucao } from "./tipos"
 
-// Entrypoint do SANDBOX efêmero (container): clona o repo, roda a tarefa com o executor headless,
-// entrega PR e reporta o resultado pro gateway via callback HMAC. O container morre depois — nada
-// do cliente persiste na infra. Segurança: JADE_GIT_TOKEN e JADE_CALLBACK_SECRET são LIDOS e
-// APAGADOS do process.env ANTES do agente rodar — código de terceiro (e o modelo, via
-// rodar_comando `env`) não enxerga os segredos da plataforma. Só a OPENROUTER_API_KEY fica
-// (é a chave do próprio usuário, BYOK, e o agente precisa dela).
-
 const TIMEOUT_CALLBACK_MS = 10_000
 
 type TarefaSandbox = { id: number; repo: string; instrucao: string }
@@ -33,7 +26,6 @@ function lerTarefa(raw: string | undefined): TarefaSandbox | null {
   }
 }
 
-/** Consome uma env secreta: lê e APAGA do process.env — o agente roda sem enxergá-la. */
 function consumirSegredo(nome: string): string {
   const v = process.env[nome] ?? ""
   delete process.env[nome]
@@ -49,7 +41,7 @@ async function reportar(
 ): Promise<void> {
   const corpo = JSON.stringify({ tarefaId, relatorio, prUrl })
   if (!callbackUrl) {
-    // sem gateway (rodada local/debug): o relatório sai no stdout, mesmo contrato do --tarefa
+
     console.log(corpo)
     return
   }
@@ -101,7 +93,6 @@ async function main(): Promise<number> {
   }
   process.chdir(dir)
 
-  // Camada 1 antes do modelo: símbolos + grafo + stack. Best-effort — sem índice o agente degrada.
   try {
     const inicio = Date.now()
     await indexar(dir)
@@ -122,7 +113,7 @@ async function main(): Promise<number> {
       prUrl = entrega.prUrl
       logSandbox("PR aberto.", { branch: entrega.branch })
     } else {
-      // estado parcial explícito: a edição existe mas a entrega travou — o relatório diz onde
+
       rel.resposta = `${rel.resposta}\n\n[Jade] a entrega falhou no passo "${entrega.passo}": ${entrega.erro.slice(0, 300)}`
       logSandbox("Entrega falhou.", { passo: entrega.passo })
     }

@@ -66,7 +66,7 @@ afterEach(async () => {
 describe("copiloto — montarMapaAmplo (Camada 2 modo amplo)", () => {
   test("monta panorama dos arquivos relevantes ao pedido, com assinaturas, sem corpos", async () => {
     raiz = await mkdtemp(join(tmpdir(), "arara-amplo-"))
-    process.env.HOME = raiz // índice persiste em $HOME/.arara (fora da árvore varrida)
+    process.env.HOME = raiz
     await writeFile(join(raiz, "auth.ts"), "export function authLogin(user: string) {\n  return user\n}\n")
     await writeFile(join(raiz, "matematica.ts"), "export function somar(a: number, b: number) {\n  return a + b\n}\n")
 
@@ -92,7 +92,7 @@ describe("retrieval por CONTEÚDO (indexar de verdade) + ponte de domínio", () 
   test("acha o arquivo por termo do conteúdo (constante de módulo), não só por símbolo", async () => {
     raiz = await mkdtemp(join(tmpdir(), "arara-ctx-"))
     process.env.HOME = raiz
-    // base_url é constante de módulo — NÃO é classe/função, então o mapa de símbolos não a vê.
+
     await writeFile(join(raiz, "config.py"), 'base_url = "https://api.exemplo.io"\ntimeout = 30\n')
     await writeFile(join(raiz, "matematica.py"), "def somar(a, b):\n    return a + b\n")
 

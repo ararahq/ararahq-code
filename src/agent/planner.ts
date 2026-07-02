@@ -26,7 +26,6 @@ export function faseDe(texto: string): Fase {
 
 const LER_TOOLS = ["ler_arquivo", "listar_arquivos", "buscar_no_projeto"]
 
-/** Tools liberadas em cada fase. Ler não pode editar nem rodar; editar não pode rodar. */
 export function ferramentasDaFase(fase: Fase): string[] {
   switch (fase) {
     case "ler":
@@ -42,7 +41,6 @@ const MARCADORES = /\b(depois|em seguida|ent[ãa]o|por fim|primeiro|segundo|terc
 const VERBOS =
   /\b(l[êe]|leia|corrig|conserta|implementa|cria|adiciona|refatora|roda|rode|executa|build|compila|test|edita|escrev|ajusta|aplica|valida|verifi|move|renomeia)/gi
 
-/** Heurística barata: só vale a pena planejar quando a tarefa tem cara de várias etapas. */
 export function pareceMultiPasso(input: string): boolean {
   const s = input.toLowerCase()
   if (MARCADORES.test(s)) return true
@@ -50,15 +48,10 @@ export function pareceMultiPasso(input: string): boolean {
   return m ? new Set(m.map((v) => v.slice(0, 4))).size >= 2 : false
 }
 
-// Tarefa que cheira a loop longo: muitos verbos de ação distintos ou escopo amplo declarado.
 const SINAIS_LOOP_LONGO =
   /\b(todos os|todas as|cada (arquivo|m[óo]dulo|service|controller|endpoint)|o projeto inteiro|toda a base|migra(r|c|ç)|reescrev|do zero|v[áa]rios arquivos|em massa|todo o c[óo]digo)\b/i
 const MIN_VERBOS_LOOP_LONGO = 4
 
-/**
- * Heurística pra rotear ao modelo de loop longo (Kimi): tarefa com 15+ passos previstos
- * ou escopo que tipicamente vira >10 iterações. Conservadora — a maioria não cai aqui.
- */
 export function pareceLoopLongo(input: string): boolean {
   const s = input.toLowerCase()
   if (SINAIS_LOOP_LONGO.test(s)) return true
@@ -66,11 +59,6 @@ export function pareceLoopLongo(input: string): boolean {
   return m ? new Set(m.map((v) => v.slice(0, 4))).size >= MIN_VERBOS_LOOP_LONGO : false
 }
 
-/**
- * Plano fixo de diagnóstico (D4): mapear -> ler -> comparar -> hipótese -> verificar -> corrigir.
- * Entra na mesma máquina de gating (prepareStep + concluir_passo) do agent. Os 5 primeiros
- * passos são de leitura (não pode editar nem rodar); só o último libera edição.
- */
 export function planoDiagnostico(): Passo[] {
   return [
     { texto: "Os pontos já foram mapeados (seção TRECHOS RELEVANTES do contexto). NÃO use buscar_no_projeto — abra e leia direto os arquivos dos pontos mais relevantes.", fase: "ler" },
@@ -97,7 +85,6 @@ function parsePlano(texto: string): Passo[] {
   }
 }
 
-/** Gera um plano numerado. Devolve [] se falhar ou não for de fato multi-passo (degrada pro fluxo normal). */
 export async function planejar(input: string): Promise<Passo[]> {
   try {
     const openrouter = provedor()

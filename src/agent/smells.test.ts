@@ -43,7 +43,7 @@ describe("smells — smellsAtivos (intent match, o elo determinístico)", () => 
   test("eq-java é gateado pra .java; eq-python pra .py (não misfira entre linguagens)", () => {
     expect(SMELLS.find((s) => s.classe === "eq-java")?.langs).toEqual(["java"])
     expect(SMELLS.find((s) => s.classe === "eq-python")?.langs).toEqual(["py"])
-    expect(SMELLS.find((s) => s.classe === "cors-wildcard")?.langs).toBeUndefined() // universal
+    expect(SMELLS.find((s) => s.classe === "cors-wildcard")?.langs).toBeUndefined()
   })
 
   test("sintoma genérico sem mecanismo não ativa nada (não chuta)", () => {

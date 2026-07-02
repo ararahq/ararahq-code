@@ -13,7 +13,6 @@ const NO_SIMBOLO = (arquivo: string, nome: string): string => `s:${arquivo}#${no
 
 const EXTS_TENTATIVA = ["", ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", "/index.ts", "/index.tsx", "/index.js"]
 
-/** Resolve um import relativo (./ ou ../) ao caminho de arquivo real existente no conjunto indexado. */
 function resolverRelativo(origem: string, alvo: string, arquivos: Set<string>): string | null {
   const baseDir = origem.includes("/") ? origem.slice(0, origem.lastIndexOf("/")) : ""
   const partes = `${baseDir}/${alvo}`.split("/")
@@ -31,15 +30,6 @@ function resolverRelativo(origem: string, alvo: string, arquivos: Set<string>): 
   return null
 }
 
-/**
- * Constrói o grafo dirigido (1.3) a partir SÓ do mapa simbólico persistido (sem reler corpos).
- * Nós: arquivos e símbolos. Arestas:
- * - IMPORTA: arquivo -> arquivo (imports relativos resolvidos a caminho; pacotes pelo nome final único).
- * - HERDA: símbolo classe/interface -> símbolo pai resolvido no projeto.
- * - CHAMA: símbolo -> símbolo que ele chama e que está definido no projeto.
- * - USA_TIPO: símbolo -> símbolo importado e referenciado no corpo.
- * Só liga quando o destino resolve a um nó conhecido — sem chute.
- */
 export function construirGrafo(fontes: ArquivoSimbolos[]): GrafoSerial {
   const arquivos = new Set(fontes.map((f) => f.arquivo))
   const nos = new Map<string, No>()
@@ -65,9 +55,6 @@ export function construirGrafo(fontes: ArquivoSimbolos[]): GrafoSerial {
     arestas.push({ de, para, tipo })
   }
 
-  // Resolve um nome chamado/herdado a um símbolo definido. Local (mesmo arquivo) sempre vale; uma
-  // definição única em OUTRO arquivo só vale se esse arquivo for alcançável por import — senão é
-  // colisão de nome (ex: chamar `trim()` não liga a um `const trim` solto e não importado).
   const resolver = (nome: string, arquivoOrigem: string, arquivosImportados: Set<string>): string | null => {
     const defs = defPorNome.get(nome)
     if (!defs?.length) return null
@@ -124,7 +111,6 @@ export function construirGrafo(fontes: ArquivoSimbolos[]): GrafoSerial {
 
 export type Caminho = { passos: No[] }
 
-/** Operações de consulta sobre o grafo dirigido. Base do debug multi-arquivo da Camada 2. */
 export class Grafo {
   private readonly nos: Map<string, No>
   private readonly saida: Map<string, Aresta[]>
@@ -156,7 +142,6 @@ export class Grafo {
     return { nos: this.nos.size, arestas }
   }
 
-  /** Resolve um id de nó a partir de id cru, "arquivo", "arquivo#simbolo" ou só nome de símbolo. */
   resolver(ref: string): string | null {
     if (this.nos.has(ref)) return ref
     if (ref.includes("#")) {
@@ -172,7 +157,6 @@ export class Grafo {
     return null
   }
 
-  /** Conexões diretas de saída de um nó (o que ele depende/chama/herda). */
   vizinhos(id: string): { aresta: Aresta; no: No }[] {
     const alvo = this.resolver(id)
     if (!alvo) return []
@@ -184,11 +168,6 @@ export class Grafo {
     return out
   }
 
-  /**
-   * Quem depende deste nó, em ORDEM TOPOLÓGICA (mais próximo -> mais distante), via BFS no grafo
-   * reverso até `profundidade` camadas. Essencial pro diagnóstico: o impacto de mudar X propaga
-   * pelos dependentes diretos primeiro, depois os deles. Cada nó aparece na 1ª camada em que é visto.
-   */
   caminharPraTras(id: string, profundidade = 3): { no: No; nivel: number; via: TipoAresta }[] {
     const alvo = this.resolver(id)
     if (!alvo) return []
@@ -212,7 +191,6 @@ export class Grafo {
     return out
   }
 
-  /** Como A e B se conectam: menor caminho dirigido de A pra B (BFS), ou null se não há. */
   caminho(a: string, b: string): Caminho | null {
     const origem = this.resolver(a)
     const destino = this.resolver(b)
@@ -244,10 +222,6 @@ export class Grafo {
     return ids.reverse().map((i) => this.nos.get(i)!)
   }
 
-  /**
-   * Subgrafo de tudo que toca um símbolo: o nó central, seus vizinhos de saída (o que ele usa) e
-   * seus dependentes diretos (quem o usa). Material focado pra Camada 2 raciocinar sobre um símbolo.
-   */
   componentesDo(simbolo: string): {
     centro: No
     usa: { no: No; via: TipoAresta }[]

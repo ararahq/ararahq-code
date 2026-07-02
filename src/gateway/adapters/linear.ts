@@ -1,9 +1,6 @@
 import type { TarefaNormalizada } from "../../autonomo/tipos"
 import { ehObjeto, ehString, limparMencaoJade, separarRepo } from "../texto"
 
-// Linear: comentário criado mencionando @jade vira tarefa; a resposta volta como comentário na
-// mesma issue. dedupeKey = id do comentário (retry de webhook não duplica).
-
 export function extrairLinear(payload: unknown): TarefaNormalizada[] {
   if (!ehObjeto(payload)) return []
   if (payload.type !== "Comment" || payload.action !== "create") return []

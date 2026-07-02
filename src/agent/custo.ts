@@ -14,8 +14,6 @@ export type RegistroTarefa = {
   ms: number
 }
 
-// Linha do histórico de custo: guarda o MODELO usado (marcha) por tarefa. Os modelos são públicos
-// nunca mostra isso na resposta — é só pra /custo admin e auditoria de qual marcha rodou.
 export type LinhaHistorico = RegistroTarefa & { ts: string }
 type Persistido = { meses: Record<string, Agregado>; historico?: LinhaHistorico[] }
 
@@ -45,11 +43,10 @@ async function gravar(dados: Persistido): Promise<void> {
     await mkdir(`${process.env.HOME}/.arara`, { recursive: true })
     await Bun.write(ARQUIVO, JSON.stringify(dados, null, 2))
   } catch {
-    // Persistência de métricas é auxiliar: falha aqui não pode derrubar a tarefa.
+
   }
 }
 
-/** Soma uma tarefa concluída na sessão (memória) e no mês corrente (disco), e loga a marcha real. */
 export async function registrarTarefa(r: RegistroTarefa): Promise<void> {
   sessao.tarefas++
   sessao.tokens += r.tokens
@@ -78,7 +75,6 @@ export async function custoMes(mes = mesAtual()): Promise<Agregado> {
   return dados.meses[mes] ?? vazio()
 }
 
-/** Histórico de custo: últimas N tarefas com o modelo usado em cada uma. */
 export async function historicoTarefas(n = 10): Promise<LinhaHistorico[]> {
   const dados = await ler()
   return (dados.historico ?? []).slice(-n).reverse()

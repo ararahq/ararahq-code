@@ -19,14 +19,13 @@ describe("assinaturaFalhas", () => {
 })
 
 describe("compararComBaseline", () => {
-  // baseline que NÃO compilava: só o erro de compilação. Os testes nem rodaram (ficam mascarados).
+
   const baselineSemCompilar = assinaturaFalhas("e: file:///r/FooTest.kt:96:13 No value passed for parameter 'x'.")
-  // baseline que COMPILAVA mas já tinha um teste falhando (ex.: teste flaky/quebrado no main).
+
   const baselineCompilava = assinaturaFalhas("com.x.FlakyTest > jaFalhava() FAILED")
 
   test("o CASO REAL v3: baseline não compilava; após consertar, sobra falha de RUNTIME → indeterminado", () => {
-    // O ControllerTest nunca chegou a rodar no baseline (compilação falhava) — está MASCARADO. Após o
-    // conserto ele roda e falha. Não dá pra afirmar se já falhava: indeterminado, não "piorou".
+
     const v = compararComBaseline(baselineSemCompilar, "com.x.ControllerTest > deveUsarNoStore() FAILED\nBUILD FAILED")
     expect(v.tipo).toBe("indeterminado")
     if (v.tipo === "indeterminado") expect(v.naoAtribuiveis.some((f) => f.includes("ControllerTest"))).toBe(true)
@@ -39,8 +38,8 @@ describe("compararComBaseline", () => {
 
   test("baseline compilava + edição INTRODUZ falha nova → piorou, listando só a nova (atribuível)", () => {
     const v = compararComBaseline(baselineCompilava, [
-      "com.x.FlakyTest > jaFalhava() FAILED", // pré-existente
-      "com.x.NovoTest > queEuQuebrei() FAILED", // nova, e o baseline compilava → é culpa da edição
+      "com.x.FlakyTest > jaFalhava() FAILED",
+      "com.x.NovoTest > queEuQuebrei() FAILED",
     ].join("\n"))
     expect(v.tipo).toBe("piorou")
     if (v.tipo === "piorou") {

@@ -60,7 +60,7 @@ describe("config/env — salvarConfigGlobal", () => {
     salvarConfigGlobal("OPENROUTER_API_KEY", "sk-or-xyz", arq)
     delete process.env.OPENROUTER_API_KEY
     carregarConfigGlobal(arq)
-    // cast: o TS estreita pra `undefined` após o delete e não vê a mutação dentro de carregarConfigGlobal
+
     const relida = process.env.OPENROUTER_API_KEY as string | undefined
     expect(relida).toBe("sk-or-xyz")
   })

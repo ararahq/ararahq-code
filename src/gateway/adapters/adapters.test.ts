@@ -56,7 +56,7 @@ describe("extrairWhatsApp", () => {
     expect(extrairWhatsApp(null)).toEqual([])
     expect(extrairWhatsApp({})).toEqual([])
     expect(extrairWhatsApp({ entry: [{ changes: [{ value: { messages: [{ type: "text" }] } }] }] })).toEqual([])
-    // imagem SEM legenda é ignorada (a Jade não adivinha o que fazer com a imagem)
+
     expect(
       extrairWhatsApp({ entry: [{ changes: [{ value: { messages: [{ type: "image", id: "x", from: "y", image: { id: "m1" } }] } }] }] }),
     ).toEqual([])

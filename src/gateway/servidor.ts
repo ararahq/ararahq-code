@@ -16,11 +16,6 @@ import { Fila } from "./fila"
 import { montarMensagemResultado, responderNaOrigem } from "./resposta"
 import { ehObjeto, ehString } from "./texto"
 
-// Gateway HTTP do Devin-mode: recebe webhook de cada origem, valida a assinatura ANTES de
-// persistir qualquer coisa, normaliza e enfileira. O despachante consome a fila e sobe sandbox;
-// o sandbox devolve o resultado em POST /interno/resultado (HMAC próprio) e o gateway responde
-// na thread de origem. Handler puro (Request -> Response) = testável sem porta.
-
 const PORTA_PADRAO = 8787
 
 type Env = Record<string, string | undefined>
@@ -37,7 +32,6 @@ function parseJson(corpo: string): unknown {
   }
 }
 
-/** Handshake de verificação da Meta (GET): confere o verify_token constant-time e ecoa o challenge. */
 function handshakeMeta(url: URL, env: Env): Response {
   const modo = url.searchParams.get("hub.mode")
   const token = url.searchParams.get("hub.verify_token")
@@ -81,7 +75,7 @@ export function criarHandler(fila: Fila, env: Env = process.env) {
         }
         const tarefas = extrairSlack(corpoRaw)
         for (const t of tarefas) fila.enfileirar(t)
-        // resposta imediata do slash command; o resultado real chega depois via bot no canal
+
         return json(200, {
           response_type: "ephemeral",
           text: tarefas.length ? "🦜 Na fila — te respondo neste canal quando terminar." : "uso: /jade [dono/repo:] <tarefa>",
@@ -102,7 +96,7 @@ export function criarHandler(fila: Fila, env: Env = process.env) {
         if (int.tipo === "ping") return json(200, { type: 1 })
         if (int.tipo === "comando") {
           fila.enfileirar(int.tarefa)
-          // type 4 = resposta imediata com conteúdo; o resultado real chega depois via bot no canal
+
           return json(200, { type: 4, data: { content: "🦜 Na fila — te respondo neste canal quando terminar." } })
         }
         return json(200, { type: 4, data: { content: "uso: /jade [dono/repo:] <tarefa>" } })
@@ -115,7 +109,7 @@ export function criarHandler(fila: Fila, env: Env = process.env) {
         return json(200, { ok: true })
       }
       case "/webhooks/jira": {
-        // Jira não assina webhook: autentica pelo segredo compartilhado da URL, constant-time
+
         const segredo = env.JADE_JIRA_WEBHOOK_SECRET
         const recebido = url.searchParams.get("secret")
         if (!segredo || !recebido || !igualConstante(recebido, segredo)) {
@@ -125,7 +119,7 @@ export function criarHandler(fila: Fila, env: Env = process.env) {
         return json(200, { ok: true })
       }
       case "/interno/resultado": {
-        // callback do sandbox: HMAC do corpo com o segredo interno, validado antes de tocar a fila
+
         const segredo = env.JADE_CALLBACK_SECRET
         const assinatura = req.headers.get("x-jade-assinatura")
         if (!segredo || !assinatura || !igualConstante(assinatura, hmacSha256Hex(segredo, corpoRaw))) {

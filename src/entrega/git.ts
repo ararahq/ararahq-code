@@ -4,10 +4,6 @@ import { join } from "node:path"
 import { createHash } from "node:crypto"
 import type { RelatorioExecucao } from "../autonomo/tipos"
 
-// Entrega do Devin-mode: transforma o working tree editado pelo executor num PR no GitHub.
-// Segurança: o token NUNCA entra em URL, argumento de comando ou log — vai só por env var e é
-// entregue ao git via GIT_ASKPASS (script temporário que ecoa a env). API com timeout explícito.
-
 const TIMEOUT_GIT_MS = 60_000
 const TIMEOUT_API_MS = 10_000
 const MAX_SLUG = 40
@@ -15,7 +11,6 @@ const MAX_TITULO = 90
 const AUTOR_NOME = "Jade Code"
 const AUTOR_EMAIL = "jade@ararahq.com"
 
-/** Slug determinístico de branch: kebab sem acento + hash curto da instrução (retry = mesmo branch). */
 export function slugDeBranch(instrucao: string): string {
   const kebab = instrucao
     .normalize("NFD")
@@ -39,7 +34,6 @@ export function tituloPR(instrucao: string): string {
   return `[Jade] ${uma.length > MAX_TITULO ? `${uma.slice(0, MAX_TITULO - 3)}...` : uma}`
 }
 
-/** Corpo do PR: estado do gate SEM maquiagem — vermelho/sem-gate aparece em destaque pro revisor. */
 export function corpoPR(instrucao: string, rel: RelatorioExecucao): string {
   const aviso =
     rel.estado === "verde"
@@ -71,7 +65,6 @@ export function corpoPR(instrucao: string, rel: RelatorioExecucao): string {
 
 type ResultadoGit = { code: number; saida: string }
 
-/** Roda git SEM shell (argv direto — nada de interpolação) e sem prompt interativo. */
 export async function git(args: string[], opts: { cwd: string; env?: Record<string, string> }): Promise<ResultadoGit> {
   const proc = Bun.spawn(["git", ...args], {
     cwd: opts.cwd,
@@ -89,10 +82,6 @@ export async function git(args: string[], opts: { cwd: string; env?: Record<stri
   return { code, saida: `${stdout}${stderr}`.trim() }
 }
 
-/**
- * Executa `fn` com um GIT_ASKPASS temporário que responde usuário/senha a partir da env — o token
- * não aparece em argv nem em ~/.git-credentials. O script é apagado no fim, aconteça o que acontecer.
- */
 async function comCredencial<T>(token: string, fn: (env: Record<string, string>) => Promise<T>): Promise<T> {
   const dir = await mkdtemp(join(tmpdir(), "jade-askpass-"))
   const script = join(dir, "askpass.sh")
@@ -127,9 +116,8 @@ export async function pushBranch(branch: string, cwd: string, token: string): Pr
 
 export type ResultadoPR = { ok: true; url: string } | { ok: false; erro: string }
 
-/** Abre o PR via API do GitHub. Timeout explícito; erro volta estruturado e sem vazar o token. */
 export async function abrirPR(opts: {
-  repo: string // "owner/nome"
+  repo: string
   base: string
   head: string
   titulo: string
@@ -153,7 +141,7 @@ export async function abrirPR(opts: {
       if (typeof pr.html_url !== "string") return { ok: false, erro: "resposta da API sem html_url" }
       return { ok: true, url: pr.html_url }
     }
-    // 422 com "A pull request already exists" = retry idempotente (mesmo branch determinístico)
+
     const corpoErro = (await resp.text()).slice(0, 400)
     if (resp.status === 422 && corpoErro.includes("already exists")) {
       return { ok: false, erro: `PR já existe pro branch ${opts.head} (retry idempotente)` }
@@ -166,10 +154,6 @@ export async function abrirPR(opts: {
 
 export type ResultadoEntrega = { ok: true; branch: string; prUrl: string } | { ok: false; passo: string; erro: string }
 
-/**
- * Entrega completa: branch -> commit -> push -> PR. Para no primeiro passo que falhar e devolve
- * QUAL passo falhou (estado parcial explícito — nunca engole nem finge sucesso).
- */
 export async function entregarPR(opts: {
   cwd: string
   repo: string

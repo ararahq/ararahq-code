@@ -1,22 +1,13 @@
-// Loop de navegação multi-passo (rumo ao 8/8). O locator (Tier 1) acha o ARQUIVO; mas muitos bugs
-// moram no CALL-SITE, não no arquivo nomeado (ex.: o dedup que não chama o Mutex — o bug não está em
-// Mutex.kt). Aqui o modelo NAVEGA: abre arquivo, segue quem chama/é chamado, lê o ponto real, itera —
-// com budget de passos e commit estruturado. Ferramentas read-only servidas do índice (com teto,
-// anti-afogamento). Genérico: zero conhecimento de domínio; tudo vem do índice real do repo.
 import { generateText, tool, stepCountIs } from "ai"
 import { z } from "zod"
 import type { Indice } from "../conhecimento"
 import { ler, grep, vizinhosArquivo, simbolosDe } from "./navegacao"
 import { detectouHedge } from "./diagnostico"
 
-const MAX_PASSOS = Number(process.env.MAX_PASSOS ?? "6") // teto de passos; 6 medido melhor que 10 (menos timeout, +cravada)
-// Budget de tempo INTERNO do loop: para de adicionar passos quando estoura, e força a conclusão a partir
-// do que já investigou. Converte "timeout (perde tudo)" em "conclui do parcial" (CAUSA ou NÃO CRAVEI
-// honesto) ANTES do abort externo. É o que mata o timeout de verdade — teto de passos não cobre passo lento.
+const MAX_PASSOS = Number(process.env.MAX_PASSOS ?? "6")
+
 const BUDGET_MS = Number(process.env.NAV_BUDGET_MS ?? "70000")
-// Deadline DURO (backstop): se o loop OU a conclusão forçada estourarem (passo lento), aborta e devolve
-// abstenção honesta do parcial — garante que o nav NUNCA bate o timeout externo (= zero "timeout perdido").
-// 110s dá folga grande abaixo do budget de produção (~200s): mesmo uma chamada-em-voo lenta (~50s) não passa.
+
 const DEADLINE_MS = Number(process.env.NAV_DEADLINE_MS ?? "110000")
 const MAX_HITS_BUSCA = 12
 const MAX_VIZINHOS = 20
@@ -32,7 +23,6 @@ REGRAS:
 - Quando tiver certeza, responda começando com "CAUSA:" seguido de arquivo:linha e a explicação curta.
 - Se NÃO tiver certeza após investigar, responda começando com "NÃO CRAVEI:" e aponte os 2-3 arquivos mais prováveis pra um humano olhar. Não chute.`
 
-/** Ferramentas read-only servidas do índice (com teto). O modelo as encadeia pra navegar até a causa. */
 function ferramentas(raiz: string, indice: Indice) {
   return {
     ler: tool({
@@ -80,12 +70,6 @@ function ferramentas(raiz: string, indice: Indice) {
 
 export type ResultadoNavegacao = { texto: string; inTok: number; outTok: number; cravou: boolean; passos: number }
 
-/**
- * Diagnostica NAVEGANDO: dá o ticket + os candidatos do locator e deixa o modelo investigar com as
- * read-tools até `MAX_PASSOS`, então commitar (CAUSA: arquivo:linha, ou NÃO CRAVEI: + onde olhar).
- * cravou = produziu CAUSA sem hedge. É o passo "earned paid" do gate de custo: roda no shortlist já
- * localizado, não no repo cego.
- */
 export async function navegarDiagnostico(
   input: string,
   raiz: string,
@@ -97,7 +81,7 @@ export async function navegarDiagnostico(
   const lista = candidatos.length ? candidatos.map((c) => `- ${c}`).join("\n") : "(nenhum candidato pré-localizado; comece buscando)"
   const prompt = `SINTOMA (relato leigo do usuário):\n${input}\n\nARQUIVOS CANDIDATOS (ponto de partida, do localizador):\n${lista}\n\nInvestigue a causa-raiz navegando. Conclua com "CAUSA:" ou "NÃO CRAVEI:".`
   const t0 = Date.now()
-  // Deadline duro: aborta nav+conclusão se estourar, combinado com o abort externo do chamador.
+
   const acHard = new AbortController()
   const timer = setTimeout(() => acHard.abort(), DEADLINE_MS)
   const sinal = signal ? AbortSignal.any([signal, acHard.signal]) : acHard.signal
@@ -116,22 +100,20 @@ export async function navegarDiagnostico(
       system: SISTEMA,
       prompt,
       tools: ferramentas(raiz, indice),
-      // Para por teto de passos OU por budget de tempo (entre passos) — o que vier primeiro.
+
       stopWhen: [stepCountIs(MAX_PASSOS), () => Date.now() - t0 > BUDGET_MS],
       temperature: 0,
       abortSignal: sinal,
     })
   } catch (e) {
     clearTimeout(timer)
-    if (acHard.signal.aborted) return abstencaoPorTempo() // deadline: abstém, não estoura o timeout externo
+    if (acHard.signal.aborted) return abstencaoPorTempo()
     throw e
   }
   let inTok = r.totalUsage?.inputTokens ?? r.usage?.inputTokens ?? 0
   let outTok = r.totalUsage?.outputTokens ?? r.usage?.outputTokens ?? 0
   let texto = r.text.trim()
 
-  // Se gastou os passos em tool-calls sem concluir (texto vazio), força a conclusão do que investigou —
-  // sob o MESMO deadline (se a conclusão estourar, fica vazio → abstém, sem travar).
   if (!texto && r.response?.messages?.length) {
     try {
       const f = await generateText({
@@ -145,20 +127,15 @@ export async function navegarDiagnostico(
       inTok += f.totalUsage?.inputTokens ?? f.usage?.inputTokens ?? 0
       outTok += f.totalUsage?.outputTokens ?? f.usage?.outputTokens ?? 0
     } catch (e) {
-      if (!acHard.signal.aborted) throw e // erro real propaga; deadline → segue com texto vazio (abstém)
+      if (!acHard.signal.aborted) throw e
     }
   }
   clearTimeout(timer)
   return { texto, inTok, outTok, cravou: ehCravado(texto), passos: r.steps?.length ?? 0 }
 }
 
-// "CAUSA:" no INÍCIO de qualquer linha, tolerando bold markdown (**CAUSA:**) e indentação. O modelo
-// barato às vezes crava certo mas com preâmbulo ("Já identifiquei a causa. Vou sintetizar.\n\n**CAUSA:**")
-// — exigir que o texto INTEIRO comece com "CAUSA:" rejeitava acerto por formatação, subcontava e ainda
-// escalava pra cadeia cara à toa. Não casa "NÃO CRAVEI:" (linha começa com "NÃO", não "CAUSA:").
 const RE_CAUSA = /^[ \t>*_-]*\*{0,2}\s*CAUSA:/im
 
-/** Cravou de verdade? Tem uma linha "CAUSA:" (não a abstenção "NÃO CRAVEI:") e não é hedge. */
 export function ehCravado(texto: string): boolean {
   return RE_CAUSA.test(texto.trim()) && !detectouHedge(texto)
 }

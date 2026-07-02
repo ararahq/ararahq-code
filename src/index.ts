@@ -9,14 +9,8 @@ import { custoSessao, custoMes, mesAtual, historicoTarefas } from "./agent/custo
 import { descobrirSkills } from "./skills/skills"
 import { carregarConfigGlobal, configurarChave } from "./config/env"
 
-// Config "uma vez": ~/.arara/.env -> process.env (sem sobrescrever export do shell nem .env do cwd).
 carregarConfigGlobal()
 
-// Modo autônomo (Devin-mode): `jade-code --tarefa "<instrução>"` roda UMA tarefa sem REPL e imprime
-// o relatório JSON no stdout. É a porta usada pelo sandbox; nada interativo acontece neste caminho.
-// exit 0 = concluiu (verde/sem-gate/sem-mudanca) · exit 1 = vermelho/erro.
-// Aceita imagem também: `--imagem <path>` (repetível) em qualquer posição. Screenshot de bug, print
-// de erro, mockup — entram no contexto do modelo junto do texto da tarefa.
 const argsCli = process.argv.slice(2)
 const caminhosImagem: string[] = []
 const restoArgs: string[] = []
@@ -58,7 +52,6 @@ function sair(): never {
   process.exit(0)
 }
 
-// Ctrl+C: cancela a tarefa em andamento e volta ao prompt; se estiver ocioso, encerra limpo.
 process.on("SIGINT", () => {
   if (cancelar()) return
   sair()

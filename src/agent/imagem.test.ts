@@ -35,7 +35,7 @@ describe("anexarImagens", () => {
       { role: "user", content: "conserta o modal" },
     ]
     const out = anexarImagens(msgs, [img])
-    // a primeira user fica intacta (string); a ÚLTIMA user vira array de partes
+
     expect(out[0].content).toBe("contexto antigo")
     expect(Array.isArray(out[2].content)).toBe(true)
     const partes = out[2].content as unknown as Array<{ type: string; text?: string }>

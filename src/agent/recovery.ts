@@ -1,15 +1,8 @@
-// Tracker de recuperação POR TAREFA. Distinto dos caps de leitura/busca (8/5),
-// do MAX_ITERACOES (24) e do MAX_RECOVERY (4, que é só threshold de mensagem).
-// Aqui mora: teto global de tentativas e o gatilho de escalada de modelo.
-
 export const TETO_RECOVERY = 6
 export const ERROS_CODIGO_PRA_ESCALAR = 3
-// 3.5 — teto de trocas de MARCHA (reclassificações) por tarefa. Distinto de escalar MODELO dentro da
-// mesma marcha. Conta JUNTO com TETO_RECOVERY: o que estourar primeiro corta. Oscilar de natureza =
-// sinal de que precisa de direção humana.
+
 export const TETO_TROCAS_MARCHA = 3
 
-// Sinais de erro de AMBIENTE (versão/ferramenta/dependência) vs erro de CÓDIGO (compilação/tipo).
 const RE_AMBIENTE =
   /\b(command not found|not found|no such file|unsupported class file|java\.lang\.UnsupportedClassVersion|requires java|jdk|jvm|JAVA_HOME|invalid source release|gradle wrapper|could not (find|resolve|download)|connection refused|network|enoent|permission denied|cannot find module|module not found|unknown compiler option|sdk not found|no version of)\b/i
 
@@ -42,7 +35,6 @@ export function classificarOrigem(saida: string): "codigo" | "ambiente" {
   return RE_AMBIENTE.test(saida) ? "ambiente" : "codigo"
 }
 
-/** Normaliza a saída de erro pra detectar "mesmo ponto": tira números, caminhos absolutos e espaços. */
 function assinatura(saida: string): string {
   return saida
     .toLowerCase()
@@ -52,10 +44,6 @@ function assinatura(saida: string): string {
     .slice(0, 200)
 }
 
-/**
- * Registra uma falha de verificação. Conta no teto global e decide se a escalada de modelo
- * deve disparar (3 erros de código no MESMO ponto). Retorna o estado pro agent agir.
- */
 export function registrarFalha(saida: string): ResultadoRecovery {
   estado.tentativas++
   const origem = classificarOrigem(saida)
@@ -79,15 +67,10 @@ export function registrarFalha(saida: string): ResultadoRecovery {
   }
 }
 
-/**
- * 3.5 — Ainda pode trocar de marcha? Só se NÃO estourou o teto de trocas (3) NEM o teto global de
- * tentativas (6) — o que vier primeiro corta. Função consultada antes de reclassificar.
- */
 export function podeTrocarMarcha(): boolean {
   return estado.trocasMarcha < TETO_TROCAS_MARCHA && estado.tentativas < TETO_RECOVERY
 }
 
-/** 3.5 — Conta uma troca de marcha (reclassificação). Chamar ao efetivar o pivô de marcha. */
 export function registrarTrocaMarcha(): { trocas: number; podeContinuar: boolean } {
   estado.trocasMarcha++
   return { trocas: estado.trocasMarcha, podeContinuar: podeTrocarMarcha() }
@@ -105,7 +88,6 @@ export function estourouTeto(): boolean {
   return estado.tentativas >= TETO_RECOVERY
 }
 
-/** Consome o gatilho de escalada (depois que o agent rodou a 2ª passada), pra não re-disparar. */
 export function consumirEscalada(): void {
   estado.escaladaPendente = false
   estado.errosCodigo = 0

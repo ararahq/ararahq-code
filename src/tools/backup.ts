@@ -20,11 +20,11 @@ export const Backup = {
     }
     return b.path
   },
-  /** Tamanho atual da pilha — vira um checkpoint pra reverter ATÉ aqui (3.4 test-time compute). */
+
   tamanho(): number {
     return pilha.length
   },
-  /** Reverte (LIFO) até a pilha voltar ao tamanho `marca`. Desfaz as edições de um candidato perdedor. */
+
   async reverterAte(marca: number): Promise<void> {
     while (pilha.length > marca) await this.reverter()
   },

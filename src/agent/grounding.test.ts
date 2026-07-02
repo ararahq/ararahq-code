@@ -17,8 +17,8 @@ describe("pareceConsertarBuild", () => {
   })
 
   test("alvo sem ação (ou vice-versa) não basta", () => {
-    expect(pareceConsertarBuild("escreve um teste novo pro serviço")).toBe(false) // teste, mas sem ação de consertar
-    expect(pareceConsertarBuild("conserta o layout do header")).toBe(false) // conserta, mas sem alvo build/teste
+    expect(pareceConsertarBuild("escreve um teste novo pro serviço")).toBe(false)
+    expect(pareceConsertarBuild("conserta o layout do header")).toBe(false)
   })
 })
 
@@ -30,9 +30,9 @@ describe("montarTarefaAterrada", () => {
     ])
     expect(t).toContain("src/test/FooTest.kt:96")
     expect(t).toContain("src/test/BarTest.kt:62")
-    expect(t).toContain("InboundService()") // trecho embutido
-    expect(t).toContain("no próprio teste, não no serviço de produção") // guardrail
-    expect(t).toContain("faça os testes passarem") // pedido original preservado
+    expect(t).toContain("InboundService()")
+    expect(t).toContain("no próprio teste, não no serviço de produção")
+    expect(t).toContain("faça os testes passarem")
   })
 })
 
@@ -60,7 +60,7 @@ describe("aterrarPorBuild", () => {
     if (r?.tipo === "aterrado") {
       expect(r.arquivos).toEqual(["src/test/kotlin/FooTest.kt", "src/test/kotlin/BarTest.kt"])
       expect(r.tarefa).toContain("src/test/kotlin/FooTest.kt:96")
-      expect(r.tarefa).not.toContain("/repo/") // normalizado, sem prefixo absoluto
+      expect(r.tarefa).not.toContain("/repo/")
     }
   })
 

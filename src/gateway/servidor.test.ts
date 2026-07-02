@@ -83,7 +83,7 @@ describe("gateway handler", () => {
   test("callback do sandbox: HMAC válido conclui a tarefa; inválido -> 401", async () => {
     const fila = new Fila(":memory:")
     const handler = criarHandler(fila, ENV)
-    // tarefa de origem cli: responderNaOrigem é no-op — o teste não sai pra rede
+
     fila.enfileirar({
       dedupeKey: "cli:1",
       origem: "cli",

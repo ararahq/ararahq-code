@@ -7,7 +7,7 @@ import {
 } from "./refcodigo"
 
 describe("pareceReferenciaCodigo — extensões agnósticas (sem lista chumbada)", () => {
-  // O bug que 3.7 mata: extensões fora da lista fechada falhavam em silêncio.
+
   test.each([
     "olha o main.cpp",
     "roda o deploy.sh",
@@ -67,7 +67,7 @@ describe("refsNoIndice — index-first", () => {
     expect(refsNoIndice("o widget sumiu", indice)).toEqual([])
   })
   test("index-first cobre referência que o padrão sozinho perderia", () => {
-    // "pool" minúsculo, sem extensão, sem hump — o padrão não pegaria; o índice pega.
+
     expect(pareceReferenciaCodigo("o pool falha", undefined)).toBe(false)
     expect(pareceReferenciaCodigo("o pool falha", indice)).toBe(true)
   })

@@ -1,10 +1,6 @@
 import type { TarefaNormalizada } from "../../autonomo/tipos"
 import { ehObjeto, ehString, limparMencaoJade, separarRepo } from "../texto"
 
-// Jira Cloud: comment_created mencionando @jade vira tarefa; resposta volta como comentário na
-// issue. Jira não assina webhook nativamente — a autenticação é o segredo compartilhado na URL,
-// comparado constant-time no servidor ANTES de chegar aqui.
-
 export function extrairJira(payload: unknown): TarefaNormalizada[] {
   if (!ehObjeto(payload) || payload.webhookEvent !== "comment_created") return []
   const comment = payload.comment

@@ -9,7 +9,6 @@ import {
   montarRespostaForaDoAlvo,
 } from "./alvo"
 
-// O repo do caso medido: o usuário fala do modal de FEEDBACK; existe um QRCodeModal parecido do lado.
 const ARQUIVOS = [
   "components/dashboard/feedback-widget.tsx",
   "components/console/QRCodeModal.tsx",

@@ -23,12 +23,12 @@ describe("3.4 — selecionarPorVerificacao", () => {
       async (i) => i,
       async (c) => {
         verificados.push(c)
-        return c === 1 // candidato 0 falha, 1 passa
+        return c === 1
       },
       async () => {},
     )
     expect(r.vencedor).toBe(1)
-    expect(verificados).toEqual([0, 1]) // 2 nem foi verificado
+    expect(verificados).toEqual([0, 1])
     expect(r.verificados).toBe(2)
   })
 
@@ -43,7 +43,7 @@ describe("3.4 — selecionarPorVerificacao", () => {
       },
     )
     expect(r.vencedor).toBe(2)
-    expect(revertidos).toEqual([0, 1]) // o vencedor (2) não é revertido
+    expect(revertidos).toEqual([0, 1])
   })
 
   test("nenhum verde -> vencedor null, todos verificados e revertidos", async () => {
@@ -68,7 +68,7 @@ describe("3.4 — selecionarPorVerificacao", () => {
       async () => false,
       async () => {},
     )
-    expect(r.gerados).toBe(2) // só 0 e 2
+    expect(r.gerados).toBe(2)
   })
 
   test("geração que lança é tolerada (vira candidato descartado)", async () => {

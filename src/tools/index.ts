@@ -43,7 +43,6 @@ const IGNORAR = new Set([
   "pgdata", ".github", ".idea", ".vscode", "coverage", ".venv", "__pycache__", ".smithery",
 ])
 
-// Autônomo por padrão. Confirma só o que é destrutivo/irreversível/externo.
 const PERIGOSOS: RegExp[] = [
   /git\s+push/i,
   /git\s+reset\s+--hard/i,
@@ -58,7 +57,7 @@ const _lidos = new Set<string>()
 let _recovery = 0
 let _buscas = 0
 let _leituras = 0
-// Contorno de ambiente (4.2) tentado nesta rodada — só UMA vez por rodada, pra não empilhar prefixo.
+
 let _contornoTentado = false
 export function novaRodada() {
   _rodada.clear()
@@ -114,11 +113,6 @@ function recortar(saida: string): string {
   return `${saida.slice(0, meio).trim()}\n…\n${saida.slice(-meio).trim()}`
 }
 
-/**
- * Roda o comando em process group próprio e transmite a saída ao vivo.
- * No timeout, mata o grupo inteiro (SIGTERM -> SIGKILL) — pega o daemon do gradle junto —
- * e resolve mesmo que o pipe não feche, então nunca trava o agente.
- */
 export function rodar(
   comando: string,
   onLinha?: (l: string) => void,
@@ -189,23 +183,22 @@ export function rodar(
 }
 
 const DIRS_IGNORADOS = [...IGNORAR, "dumps"]
-// Arquivos de dados/gerados que poluem a busca (dumps SQL, lockfiles, minificados, backups).
+
 const ARQUIVOS_RUIDO = ["*.sql", "*.lock", "*.lockb", "*.min.js", "*.map", "*.snap", "*.csv", "backup*"]
 const EXCLUI_DIRS = `{${DIRS_IGNORADOS.join(",")}}`
-// rg não expande brace em glob ('!**/{a,b}/**' não funciona); precisa de um -g por diretório/arquivo.
+
 const RG_GLOBS = [
   ...DIRS_IGNORADOS.map((d) => `-g '!${d}/'`),
   ...ARQUIVOS_RUIDO.map((a) => `-g '!${a}'`),
 ].join(" ")
 const GREP_EXCLUI_ARQ = ARQUIVOS_RUIDO.map((a) => `--exclude='${a}'`).join(" ")
-// Pro dossiê de diagnóstico: só código-fonte de verdade, sem teste/lock/json/bundle.
+
 const FONTE_EXTS = ["kt", "kts", "ts", "tsx", "js", "jsx", "java", "py", "go", "rs", "php", "rb", "c", "h", "cpp", "cc", "hpp", "cs", "swift"]
 const RG_FONTE = FONTE_EXTS.map((e) => `-g '*.${e}'`).join(" ")
 const RG_NAO_TESTE = ["-g '!*.test.*'", "-g '!*.spec.*'", "-g '!*Test.*'", "-g '!*Tests.*'", "-g '!**/test/**'", "-g '!**/tests/**'", "-g '!**/__tests__/**'"].join(" ")
 const GREP_FONTE = FONTE_EXTS.map((e) => `--include='*.${e}'`).join(" ")
 const TEM_RG = Boolean(Bun.which("rg"))
 
-/** Busca por regex de verdade (alternância com |, .*, classes). Exclui dirs e arquivos de ruído (dumps/locks/sql). */
 export function comandoBusca(query: string): string {
   const q = query.replace(/'/g, "'\\''")
   if (TEM_RG) {
@@ -214,7 +207,6 @@ export function comandoBusca(query: string): string {
   return `grep -rniIE --max-count=3 --exclude-dir=${EXCLUI_DIRS} ${GREP_EXCLUI_ARQ} -e '${q}' . 2>/dev/null | head -40`
 }
 
-/** Conta hits por arquivo pra rankear relevância (dossiê de diagnóstico). Saída "arquivo:N" ordenada desc. */
 export function comandoContagem(query: string): string {
   const q = query.replace(/'/g, "'\\''")
   if (TEM_RG) {
@@ -231,7 +223,6 @@ export function ehVerificacao(comando: string): boolean {
   return RE_VERIFICACAO.test(comando)
 }
 
-/** Empurra o agente a consertar e re-rodar até verde, com teto pra não entrar em loop. */
 export function sufixoRecovery(tentativa: number): string {
   if (tentativa <= MAX_RECOVERY) {
     return `\n\n--- FALHOU (tentativa ${tentativa}/${MAX_RECOVERY}). Decida a ORIGEM:\n• Erro do SEU código (compilação/tipo no que editou) → corrija o ponto exato e rode de novo.\n• Erro de AMBIENTE (versão de runtime — Java/Node/Python/Go/Rust — ou ferramenta/dependência faltando) → NÃO fique caçando com find/grep/sed. Confirma que teu código está certo, diz ao usuário qual runtime/ferramenta instalar (na versão exigida) e PARA.`
@@ -359,14 +350,11 @@ export const ferramentas = {
     inputSchema: z.object({ comando: z.string(), motivo: z.string() }),
     execute: async ({ comando, motivo }, opts) => {
       if (BLOQUEIOS.some((r) => r.test(comando))) return `comando bloqueado por segurança: ${comando}`
-      // Trava de JAVA_HOME chutado: o contorno de ambiente é resolvido por `/usr/libexec/java_home`
-      // (contornoAmbiente). Se o modelo improvisa um caminho literal que NÃO existe (o caso real:
-      // `/usr/local/opt/openjdk@17`), não gasta 40s num build fadado — devolve na hora e reorienta.
+
       const mJava = comando.match(/\bJAVA_HOME=(["']?)(\/[^"'\s&|;$]+)\1/)
       if (mJava && !existsSync(mJava[2]))
         return `JAVA_HOME chutado: "${mJava[2]}" não existe nesta máquina. NÃO adivinhe caminho de runtime — o ambiente Java é resolvido automaticamente, então rode o build direto (ex.: ./gradlew ...) sem exportar JAVA_HOME. Se faltar um JDK de fato, diga qual versão instalar e pare.`
-      // 4.3 — ação repetida: o MESMO comando não-verificação já rodou nesta tarefa. Build/teste fica
-      // de fora (re-rodar após conserto é legítimo); um `ls`/`cat`/`find` repetido é loop sem progresso.
+
       if (!ehVerificacao(comando) && acaoRepetida("rodar_comando", comando))
         return `Você já rodou exatamente "${comando}" nesta tarefa e não é build/teste. Use o resultado anterior — não repita a mesma ação, avance pro próximo passo.`
       ui.toolAcao("rodar_comando", comando)
@@ -382,9 +370,6 @@ export const ferramentas = {
       }
       ui.toolResultado(`exit ${code} · ${(saida ? saida.split("\n").length : 0)} linha(s) · ${seg}s`)
 
-      // 4.2 — degrau de ambiente: build falhou por runtime/toolchain incompatível (Java, Node,
-      // Python, Go, Rust...) ou ferramenta faltando? Classifica como ambiente, tenta UM contorno
-      // determinístico e, se não resolver, DEVOLVE honesto — em vez de virar loop de find/grep/sed.
       if (code !== 0 && ehVerificacao(comando) && !_contornoTentado) {
         const amb = contornoAmbiente(comando, saida)
         if (amb) {
@@ -403,8 +388,7 @@ export const ferramentas = {
 
       let sufixo = ""
       if (code !== 0 && ehVerificacao(comando)) {
-        // Ancoragem no local exato do erro (grep grátis): antes de qualquer conselho, diz ONDE o
-        // compilador apontou — mata o "erro no teste vira edição no serviço de nome parecido".
+
         sufixo += dicaLocaisErro(saida)
         const r = registrarFalha(saida)
         sufixo += r.estourou
@@ -418,7 +402,6 @@ export const ferramentas = {
 
 type ResultadoComando = { code: number; saida: string; expirou: boolean; seg: string }
 
-/** Executa um comando com streaming na tela (cap de linhas) e devolve resultado + tempo. Reusável pro contorno. */
 async function executarComando(comando: string, signal?: AbortSignal): Promise<ResultadoComando> {
   const inicio = Date.now()
   let mostradas = 0

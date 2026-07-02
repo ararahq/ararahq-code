@@ -8,8 +8,8 @@ import { perfilTermos } from "../engine/marques"
 describe("skills — ponte de língua PT→EN", () => {
   test("expande termo PT com o equivalente EN, sem perder o PT", () => {
     const exp = expandirTermosLingua(perfilTermos("auditoria de segurança e autenticação"))
-    expect(exp.has("segurança")).toBe(true) // mantém PT
-    expect(exp.has("security")).toBe(true) // adiciona EN
+    expect(exp.has("segurança")).toBe(true)
+    expect(exp.has("security")).toBe(true)
     expect(exp.has("audit")).toBe(true)
     expect(exp.has("authentication")).toBe(true)
   })
@@ -33,14 +33,12 @@ afterEach(async () => {
   resetSkills()
 })
 
-/** Cria uma skill no formato Claude (pasta/SKILL.md) sob `base/.claude/skills`. */
 async function criarSkill(base: string, raizSkills: string, nome: string, frontmatter: string, corpo: string) {
   const dir = join(base, raizSkills, nome)
   await mkdir(dir, { recursive: true })
   await writeFile(join(dir, "SKILL.md"), `---\n${frontmatter}\n---\n${corpo}\n`)
 }
 
-/** Monta um projeto temporário + HOME temporário isolado, e devolve a raiz do projeto. */
 async function cenario(): Promise<{ raiz: string; home: string }> {
   tmp = await mkdtemp(join(tmpdir(), "arara-skills-"))
   const home = join(tmp, "home")

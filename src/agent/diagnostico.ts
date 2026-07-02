@@ -18,10 +18,6 @@ export type MapaComparacao = { entidades: string[]; hits: Hit[]; texto: string }
 
 const MIN_ESPECIFICOS = 2
 
-/**
- * Monta a query de alternância pra busca. Se há termos específicos suficientes, descarta os
- * genéricos (number, message) — eles casam prosa/config e diluem os hits que importam.
- */
 export function queryDe(entidades: string[]): string {
   const especificos = entidades.filter((e) => !ehGenerico(e))
   const usados = especificos.length >= MIN_ESPECIFICOS ? especificos : entidades
@@ -31,7 +27,6 @@ export function queryDe(entidades: string[]): string {
     .join("|")
 }
 
-/** Converte "caminho:linha:conteudo" (saída do rg/grep) em Hit estruturado. */
 export function parseHits(saida: string, max = MAX_HITS): Hit[] {
   const hits: Hit[] = []
   for (const linha of saida.split("\n")) {
@@ -49,7 +44,6 @@ export function parseHits(saida: string, max = MAX_HITS): Hit[] {
   return hits
 }
 
-/** Renderiza o mapa de comparação em texto pra injetar no system prompt. */
 export function renderMapa(entidades: string[], hits: Hit[]): string {
   if (!hits.length) return ""
   const cabecalho = `PONTOS QUE TOCAM EM ${entidades.join(", ")} (compare os que deveriam se comportar igual):`
@@ -57,11 +51,6 @@ export function renderMapa(entidades: string[], hits: Hit[]): string {
   return `${cabecalho}\n${corpo}`
 }
 
-/**
- * O truque central do diagnóstico (D3): transforma "ache o erro" (aberto, ruim pro modelo barato)
- * em "compare estes pontos" (fechado, bom). Extrai entidades, busca os pontos que as tocam,
- * e monta um mapa de comparação injetado no system. Degrada pra vazio se nada bater.
- */
 export async function mapaDeComparacao(input: string): Promise<MapaComparacao> {
   const entidades = extrairEntidades(input)
   if (!entidades.length) return { entidades, hits: [], texto: "" }
@@ -78,11 +67,6 @@ const MAX_RODADAS_RACIOCINIO = 3
 
 export type ArquivoRank = { arquivo: string; hits: number }
 
-/**
- * Ranqueia os arquivos por contagem de hits (mais matches = mais central ao sintoma). Quando o
- * sintoma cita uma linguagem, FILTRA pros arquivos daquele ecossistema — sem isso, num monorepo
- * poliglota a prosa casa centenas de arquivos e o dossiê explode (a passada do modelo dá timeout).
- */
 export async function arquivosRelevantes(entidades: string[], prefixos: string[] = []): Promise<ArquivoRank[]> {
   const query = queryDe(entidades)
   if (!query) return []
@@ -98,11 +82,6 @@ export async function arquivosRelevantes(entidades: string[], prefixos: string[]
     .slice(0, MAX_FICHEIROS)
 }
 
-/**
- * Lê o código real dos arquivos MAIS relevantes ao sintoma (ranqueados por contagem de hits,
- * com ruído excluído). Determinístico e rápido — dá ao raciocínio o material certo pra comparar,
- * em vez de uma busca aberta. Antes pegava os 4 primeiros por ordem do grep e vinha só frontend.
- */
 export async function lerDossie(entidades: string[], prefixos: string[] = []): Promise<string> {
   const arquivos = await arquivosRelevantes(entidades, prefixos)
   const partes: string[] = []
@@ -118,22 +97,12 @@ export async function lerDossie(entidades: string[], prefixos: string[] = []): P
   return partes.join("\n\n")
 }
 
-// --- Comparação pareada (D4) -------------------------------------------------
-// O pulo do gato do diagnóstico: em vez de jogar arquivos crus e pedir "ache o bug" (pergunta
-// aberta, ruim até pro modelo caro), o scaffold monta PARES de caminhos que operam sobre a MESMA
-// entidade e chamam a MESMA família de operação (ex: dois métodos que fazem repo.findFirst*),
-// lado a lado, com a pergunta fechada: "por que A e B divergem? qual causa o sintoma?".
-// Isso converte descoberta em comparação — o que faz o modelo cravar.
-
 const MAX_PARES = 4
 const MIN_ARQUIVO_PRA_PAREAR = 2
 
-// Definição de método/função em Kotlin/Java/TS/JS/Python/Go/Rust/PHP/Ruby. Captura o nome.
 const RE_DEF_METODO =
   /^\s*(?:(?:public|private|protected|internal|open|override|suspend|static|final|fun|def|func|function|fn|sub|async|export|const|val|let)\s+)*(?:fun|def|func|function|fn|sub)?\s*([A-Za-z_$][\w$]*)\s*(?:<[^>]*>)?\s*\(/
 
-// Famílias de operação sobre repositório/estado. Duas chamadas da MESMA família em métodos
-// diferentes são candidatas a par (deveriam buscar/salvar igual, mas talvez divirjam).
 const FAMILIAS_OP: { familia: string; re: RegExp }[] = [
   { familia: "findFirst", re: /\bfindFirst\w*\s*\(/ },
   { familia: "findBy", re: /\bfindBy\w*\s*\(/ },
@@ -147,7 +116,6 @@ const FAMILIAS_OP: { familia: string; re: RegExp }[] = [
 type Metodo = { nome: string; inicio: number; fim: number }
 type ChamadaOp = { metodo: string; familia: string; linha: number; trecho: string; alvo: string }
 
-/** Recorta as definições de método de um arquivo, com a faixa de linhas [início, fim) de cada um. */
 function extrairMetodos(linhas: string[]): Metodo[] {
   const defs: { nome: string; inicio: number }[] = []
   for (let i = 0; i < linhas.length; i++) {
@@ -161,7 +129,6 @@ function extrairMetodos(linhas: string[]): Metodo[] {
   }))
 }
 
-// Tokens que o regex de definição pode capturar mas não são métodos (control flow, ctor de coleção).
 const PALAVRAS_NAO_METODO = new Set([
   "if", "for", "while", "when", "switch", "catch", "return", "with", "synchronized",
   "listOf", "setOf", "mapOf", "arrayOf", "require", "check", "println", "print",
@@ -169,12 +136,8 @@ const PALAVRAS_NAO_METODO = new Set([
 
 const MAX_TRECHO_PAR = 110
 
-// Extrai o identificador chamado da família (ex: findFirstByOrganizationIdIsNullAndIsActiveTrue).
-// O sufixo desse identificador define a "intenção" da query — chamadas com mesmo sufixo fazem a
-// mesma coisa por caminhos diferentes (o que vira o par A vs B). Família como prefixo opcional.
 const RE_ALVO_OP = /\b(find\w+|save\w*|delete\w*|update\w*|query\w*)\s*\(/
 
-/** Acha TODAS as chamadas de cada família de operação dentro de cada método (não só a primeira). */
 function chamadasDeOperacao(linhas: string[], metodos: Metodo[]): ChamadaOp[] {
   const chamadas: ChamadaOp[] = []
   for (const met of metodos) {
@@ -207,11 +170,6 @@ export type Par = {
 
 const MIN_TOKEN_ENTIDADE = 4
 
-/**
- * Um método toca a entidade se: o nome dele a cita, OU o corpo dele a cita (camelCase ou prosa),
- * OU o arquivo é claramente da entidade (nome do arquivo casa). Olhar o CORPO é o que pega
- * processStatusUpdate/creditLedger no teste-mãe: o nome não diz "ledger", mas a query no corpo sim.
- */
 function metodoTocaEntidade(
   metodo: string,
   corpo: string,
@@ -223,7 +181,6 @@ function metodoTocaEntidade(
   return entidades.some((e) => e.length >= MIN_TOKEN_ENTIDADE && alvo.includes(e.toLowerCase()))
 }
 
-/** O nome do arquivo casa a entidade? (LedgerService casa "ledger"/"balance"). */
 function arquivoCasaEntidade(arquivo: string, entidades: string[]): boolean {
   const base = (arquivo.split("/").pop() ?? "").toLowerCase()
   return entidades.some((e) => e.length >= MIN_TOKEN_ENTIDADE && base.includes(e.toLowerCase()))
@@ -231,12 +188,6 @@ function arquivoCasaEntidade(arquivo: string, entidades: string[]): boolean {
 
 const MAX_BYTES_ARQUIVO = 200_000
 
-/**
- * Monta os pares de comparação a partir dos arquivos do dossiê (D4). Procura métodos que tocam a
- * entidade e chamam a MESMA família de operação, mas em pontos diferentes — e os apresenta lado a
- * lado. Prioriza pares INTRA-arquivo (mais provável de ser o caminho A vs B do mesmo serviço).
- * Determinístico, sem LLM. Degrada pra [] se não houver par óbvio (aí o dossiê cru basta).
- */
 export async function montarPares(entidades: string[], arquivos: ArquivoRank[]): Promise<Par[]> {
   const especificos = entidades.filter((e) => !ehGenerico(e))
   const alvos = (especificos.length ? especificos : entidades).map((e) => e.toLowerCase())
@@ -274,7 +225,7 @@ export async function montarPares(entidades: string[], arquivos: ArquivoRank[]):
     }
   }
   candidatos.sort((x, y) => y.score - x.score)
-  // Não repete o mesmo método dos dois lados em pares diferentes: variedade de comparações.
+
   const pares: Par[] = []
   const usados = new Set<string>()
   for (const { par } of candidatos) {
@@ -289,15 +240,6 @@ export async function montarPares(entidades: string[], arquivos: ArquivoRank[]):
 
 const SUFIXO_MIN = 4
 
-/**
- * Score do par (D4): quão forte é como "caminho A vs B do mesmo bug". Pesos calibrados pra que o
- * par cujo CÓDIGO fala do sintoma vença um par só estruturalmente parecido. Pesos:
- * - mesma INTENÇÃO de query (alvos compartilham sufixo significativo, ex: ...IsActiveTrue): +4
- * - intra-arquivo (mesmo serviço): +2
- * - algum dos trechos cita um termo do sintoma (shared/dedicated...): +3
- * - algum dos nomes de método cita a entidade (creditLedger): +2
- * - arquivo casa a entidade pelo nome: +1
- */
 function pontuarPar(a: ChamadaCtx, b: ChamadaCtx, entidades: string[]): number {
   let s = 0
   if (sufixoComum(a.alvo, b.alvo).length >= SUFIXO_MIN) s += 4
@@ -310,7 +252,6 @@ function pontuarPar(a: ChamadaCtx, b: ChamadaCtx, entidades: string[]): number {
   return s
 }
 
-/** Maior sufixo comum entre dois identificadores (case-insensitive). Mede "mesma intenção de query". */
 function sufixoComum(x: string, y: string): string {
   const a = x.toLowerCase()
   const b = y.toLowerCase()
@@ -319,14 +260,12 @@ function sufixoComum(x: string, y: string): string {
   return a.slice(a.length - i)
 }
 
-/** Gera todos os pares (i<j) de uma lista. */
 function* combinar<T>(xs: T[]): Generator<[T, T]> {
   for (let i = 0; i < xs.length; i++) {
     for (let j = i + 1; j < xs.length; j++) yield [xs[i], xs[j]]
   }
 }
 
-/** Renderiza os pares como bloco de texto fechado pra injetar ANTES do dossiê cru no material da M3. */
 export function renderPares(pares: Par[], entidades: string[]): string {
   if (!pares.length) return ""
   const rotulo = entidades.filter((e) => !ehGenerico(e))[0] ?? entidades[0] ?? "a entidade"
@@ -344,18 +283,10 @@ export function renderPares(pares: Par[], entidades: string[]): string {
   return `COMPARAÇÃO PAREADA (já feita pra você — analise, NÃO busque mais):\n\n${blocos.join("\n\n")}`
 }
 
-// --- Detecção de "não cravou" (D6) -------------------------------------------
 const RE_FALTA = /^\s*FALTA:\s*(.+)$/im
-// Uma referência arquivo:linha concreta é o sinal de que cravou (apontou o ponto exato).
+
 const RE_ARQUIVO_LINHA = /[\w./-]+\.[A-Za-z]{1,5}:\d+|\blinha\s+\d+\b/i
 
-/**
- * O diagnóstico NÃO cravou? Função pura testável (D6). Apontar um arquivo:linha concreto é o sinal
- * DOMINANTE de que cravou — ressalvas de IMPLEMENTAÇÃO na seção CORREÇÃO ("deve ser corrigida", "se
- * o método não existir, adicione") são caveats do fix, não incerteza no diagnóstico, e NÃO devem
- * disparar o fallback (esse falso-positivo descartava diagnósticos corretos e queimava a cadeia toda).
- * Só não cravou se: ainda pede arquivo (FALTA:), ou não aponta nenhum ponto concreto (arquivo:linha).
- */
 export function detectouHedge(texto: string): boolean {
   if (RE_FALTA.test(texto)) return true
   return !RE_ARQUIVO_LINHA.test(texto)
@@ -370,12 +301,9 @@ const SISTEMA_RACIOCINIO =
   "listando os arquivos exatos que faltam. NÃO chute conclusão sobre material incompleto, mas também NÃO peça arquivo que já está abaixo.\n" +
   "Com material suficiente, responda CURTO e estruturado, sem hedge (nada de 'provavelmente'/'talvez'): (1) CAUSA RAIZ — arquivo:linha e o trecho exato; (2) CORREÇÃO — o que trocar por quê (de X para Y), preciso o bastante pra outro dev aplicar sem pensar."
 
-// Material ESCOPADO (superfície do escopo do sintoma) = tudo que existe sobre o assunto já está abaixo.
-// Pedir mais arquivo aqui é fuga: a causa ESTÁ neste código. Suprime o FALTA: pra o modelo cravar.
 const ESCOPADO_SUFIXO =
   "\n\nESTE É TODO O MATERIAL relevante ao sintoma (superfície escopada). NÃO responda 'FALTA:' nem peça mais arquivos — a causa ESTÁ neste código; aponte a CAUSA RAIZ (arquivo:linha) com o que está aqui."
 
-/** Extrai os arquivos que o raciocínio pediu pra ver (linha "FALTA: a, b"). [] se não pediu nada. */
 export function parseFalta(texto: string): string[] {
   const m = texto.match(RE_FALTA)
   if (!m) return []
@@ -406,8 +334,7 @@ export type Material = {
   dossie: string
   texto: string
   fonte: "indice" | "grep"
-  // veio da superfície escopada (SDK pequeno inteiro): contexto bom, mas sem par. O gate de escalada
-  // permite 1 degrau aqui (barato -> 1 forte), não a cadeia toda (que é só pro par preciso).
+
   escopado: boolean
 }
 export type ResultadoDiagnostico = {
@@ -424,14 +351,6 @@ export type ResultadoFallback = ResultadoDiagnostico & {
   cravou: boolean
 }
 
-/**
- * Reúne o material do diagnóstico SEM chamar LLM (D4). Caminho principal (Camada 2): monta o pacote
- * DETERMINÍSTICO via índice/grafo — sementes pelo índice reverso, comparação pareada a partir do
- * campo `chama` dos símbolos (não regex/grep), trechos cirúrgicos pelos ranges, precedentes da
- * memória. Se o índice vier FRACO (o sintoma não casou o código pelo nome), DEGRADE pro gather
- * antigo por grep — sem quebrar o caminho que já roda. Reusável: o mesmo material alimenta todos os
- * modelos da cadeia de fallback sem recomputar I/O.
- */
 export async function reunirMaterial(input: string): Promise<Material> {
   const pacote = await montarPacote(process.cwd(), input, criarResumirFn())
   if (pacote.forte && pacote.texto.trim()) {
@@ -446,7 +365,6 @@ export async function reunirMaterial(input: string): Promise<Material> {
   return reunirMaterialGrep(input)
 }
 
-/** Gather LEGADO por grep (fallback quando o índice resolve pouco). Preserva o caminho v0.1.6. */
 async function reunirMaterialGrep(input: string): Promise<Material> {
   const entidades = extrairEntidades(input)
   const prefixos = await escoposCitados(process.cwd(), input, await listarFontes(process.cwd()))
@@ -457,11 +375,6 @@ async function reunirMaterialGrep(input: string): Promise<Material> {
   return { entidades, hits: ranking.reduce((s, a) => s + a.hits, 0), pares, dossie, texto, fonte: "grep", escopado: false }
 }
 
-/**
- * Diagnóstico com UM modelo: raciocina sobre o material já reunido, com FEEDBACK de FALTA.
- * Se o modelo disser que falta um arquivo (que o scaffold ainda não reuniu), lê e pensa de novo
- * (até MAX_RODADAS). Restaura o "perceber que falta material" sem a lentidão de pensar a cada passo.
- */
 export async function diagnosticar(
   input: string,
   model: Parameters<typeof generateText>[0]["model"],
@@ -479,8 +392,6 @@ export async function diagnosticar(
   let texto = ""
   let rodadas = 0
 
-  // Superfície escopada já tem o SDK INTEIRO no contexto — pedir "falta arquivo" é ruído e re-roda à
-  // toa (foi o que deu timeout). Uma rodada só. Material por índice/grep mantém o loop de completar.
   const maxRodadas = material.escopado ? 1 : MAX_RODADAS_RACIOCINIO
   for (let i = 1; i <= maxRodadas; i++) {
     rodadas = i
@@ -496,11 +407,10 @@ export async function diagnosticar(
     if (!extra) break
     dossie += `\n\n${extra}`
   }
-  // resolvido = produziu um diagnóstico de verdade, não ficou pedindo arquivo que o scaffold não reuniu.
+
   return { texto, inTok, outTok, rodadas, resolvido: !RE_FALTA.test(texto) }
 }
 
-// Locator (Tier 1 do gate de custo): tradução do sintoma leigo → raízes de código + tamanhos da seleção.
 const TOP_SHORTLIST = 3
 const SISTEMA_TERMOS = `Você é um localizador de código. Dado um relato LEIGO de bug, liste de 6 a 10 termos de busca que aparecem LITERALMENTE no código-fonte.
 REGRAS:
@@ -509,7 +419,6 @@ REGRAS:
 - Inclua o jargão técnico da CLASSE do problema (segurança→ssrf/xss/sanitize; concorrência→lock/mutex/race; retry→retry/backoff).
 - Um por linha. Sem prosa, sem numeração.`
 
-/** Micro-chamada barata: traduz o sintoma leigo em raízes de código pesquisáveis (a única parte que pede modelo). */
 async function traduzirParaTermos(
   input: string,
   model: Parameters<typeof generateText>[0]["model"],
@@ -524,15 +433,6 @@ async function traduzirParaTermos(
   return { termos, inTok: r.usage?.inputTokens ?? 0, outTok: r.usage?.outputTokens ?? 0 }
 }
 
-/**
- * Diagnóstico por NAVEGAÇÃO pra material FRACO (sem par preciso): traduz o sintoma → localiza os
- * candidatos (locator barato) → o modelo NAVEGA o código (abre arquivo, segue call-site, lê o ponto
- * real) e commita "CAUSA:" ou abstém "NÃO CRAVEI:". Medido em repo real (benchmark interno): cravou 1→5/8, confiante-errado
- * 5→0/8 com modelo barato — navega até o call-site e pega bug de ausência que grep não acha. Escalar
- * pro forte foi medido NET-NEGATIVO (não cracka os duros, só custa), então roda 1 modelo barato.
- * Retorna null pra degradar pro fluxo normal (ex.: sem índice). Gateado pelo chamador em `pares===0`,
- * protegendo o 8/8 do Arara. Best-effort: erro → null.
- */
 async function diagnosticarNavegando(
   input: string,
   cadeia: string[],
@@ -546,8 +446,7 @@ async function diagnosticarNavegando(
     const indice = await carregarIndice(process.cwd())
     if (!indice) return null
     const t = await traduzirParaTermos(input, model, signal)
-    // Locator combinado: lexical (IDF + match estrutural) + dicionário de smells (grep por MECANISMO do
-    // sintoma). Medido grátis nos fixtures: 0→4/8 gabaritos no top-3 vs lexical puro, sem custo de modelo.
+
     const candidatos = (await localizarComSmell(process.cwd(), indice, input, t.termos))
       .slice(0, TOP_SHORTLIST)
       .map((c) => c.arquivo)
@@ -559,14 +458,9 @@ async function diagnosticarNavegando(
     let custo = custoDe(slug, inTok, outTok)
     const modelosUsados = [slug]
 
-    // Verificador sintoma→causa (forte lê a janela e julga se a causa produz o sintoma). OPT-IN
-    // (`COM_VERIFICADOR=1`): medido NET-NEGATIVO no default — a chamada extra do forte taxa latência
-    // (→ timeout, que perde a cravada) e o verificador ainda false-confirma (não reduz confiante-errado).
-    // Desligá-lo dobrou cravou-certo (12%→31%) e cortou timeout (50%→25%). Fica pronto pra quando for
-    // mais rápido/seletivo. Ver corpus / verificador.ts.
     const alvo = cravou ? extrairCausaAlvo(texto) : null
     if (alvo && process.env.COM_VERIFICADOR === "1") {
-      // verify com modelo BARATO por default (rápido+barato, sob budget → não causa timeout); VERIF_FORTE=1 usa o forte.
+
       const slugVerif = process.env.VERIF_FORTE === "1" ? (cadeia[2] ?? cadeia[cadeia.length - 1]) : cadeia[0]
       const v = await verificarCausa(input, process.cwd(), alvo.arquivo, alvo.linha, criarModel(slugVerif), signal)
       inTok += v.inTok
@@ -596,13 +490,6 @@ async function diagnosticarNavegando(
   }
 }
 
-/**
- * Diagnóstico com fallback INVISÍVEL (M3, D6): reúne o material UMA vez e percorre a cadeia
- * Gemini -> GPT-5.5 -> Opus. Se um modelo não crava (detectouHedge: sem arquivo:linha, hedge, ou
- * ainda pedindo arquivo), repassa o MESMO material pro próximo, uma passada cada. Para no primeiro
- * que crava. Custo somado por modelo via `custoDe`; quem orquestra exibe só "Jade · diagnóstico".
- * `criarModel` instancia o provider por slug; `onTroca` avisa a troca (só pra log interno, nunca tela).
- */
 export async function diagnosticarComFallback(
   input: string,
   cadeia: string[],
@@ -613,10 +500,7 @@ export async function diagnosticarComFallback(
   signal?: AbortSignal,
 ): Promise<ResultadoFallback> {
   const material = await reunirMaterial(input)
-  // NAVEGA PRIMEIRO, cadeia precisa como fallback. A navegação tem 0 confiante-errado (medido nos dois
-  // datasets), então só "ganha" o que CRAVA de verdade — pega o estrangeiro/leigo (5/8) e o bug de
-  // ausência (call-site). Quando ela ABSTÉM (caso de par preciso renderizável, o forte do Arara), cai
-  // na cadeia abaixo, que crava esses. Resultado: estrangeiro sobe sem derrubar o 8/8 do Arara.
+
   if (cadeia.length) {
     const nav = await diagnosticarNavegando(input, cadeia, criarModel, custoDe, signal)
     if (nav?.cravou) {
@@ -633,18 +517,13 @@ export async function diagnosticarComFallback(
   let modelo = cadeia[0] ?? ""
   let primeiroMapa = true
 
-  // COMEÇA BARATO (cadeia[0]) e SÓ escala no sweet spot da arquitetura: a COMPARAÇÃO PAREADA precisa,
-  // onde mais raciocínio (até o opus) de fato compensa. Superfície escopada / grep roda 1 passada e
-  // devolve — medido: escalar sobre superfície custa ~60x mais e NÃO converte (variância do modelo +
-  // bug sutil que pede par, não dump). Sem par = sem escalar. "Gasta só onde o material justifica."
   const maxModelos = material.pares.length > 0 ? cadeia.length : 1
   for (let i = 0; i < cadeia.length && i < maxModelos; i++) {
     const slug = cadeia[i]
     modelo = slug
     modelosUsados.push(slug)
     onTroca(slug)
-    // O esforço escala com o modelo: o BARATO (1ª passada) usa esforço MÉDIO — rápido mas confiável o
-    // bastante pra cravar bug simples sem ser cara-ou-coroa; quando ESCALA pro forte, pensa fundo (high).
+
     const effort: Esforco = i === 0 ? "medium" : "high"
     const r = await diagnosticar(
       input,
@@ -685,13 +564,6 @@ export type CandidatoDiagnostico = { texto: string; inTok: number; outTok: numbe
 
 const TEMPS_CANDIDATOS = [0.2, 0.5, 0.8, 1.0]
 
-/**
- * 3.4 — Gera N candidatos de diagnóstico EM PARALELO sobre o MESMO material já reunido, variando a
- * temperatura pra diversificar as hipóteses. Raciocínio puro (sem efeito colateral) — paralelizar é
- * seguro e corta latência. Devolve só os candidatos que CRAVARAM (arquivo:linha, sem hedge). Quem
- * chama seleciona por VERIFICAÇÃO (aplica o fix + build), via `selecionarPorVerificacao`. PAGO: N
- * passadas de raciocínio — usar só no diagnóstico difícil que a 1ª passada não cravou.
- */
 export async function gerarCandidatosDiagnostico(
   input: string,
   material: Material,
@@ -708,11 +580,6 @@ export async function gerarCandidatosDiagnostico(
   return res.filter((r): r is { candidato: CandidatoDiagnostico; cravou: boolean } => r != null && r.cravou).map((r) => r.candidato)
 }
 
-/**
- * Fase 1 do diagnóstico: UMA passada de raciocínio (thinking ON) sobre o material já reunido.
- * Cospe o diagnóstico mastigado (causa raiz + correção) que o modelo rápido executa na fase 2.
- * Tira o raciocínio caro do loop agêntico — é uma pensada só, não seis.
- */
 export type Esforco = "low" | "medium" | "high"
 
 export async function raciocinarDiagnostico(

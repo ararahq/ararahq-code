@@ -21,7 +21,7 @@ describe("3.4 — Backup.reverterAte (revert ao checkpoint)", () => {
 
     Backup.registrar(a, "v0")
     await Bun.write(a, "v1")
-    Backup.registrar(b, null) // arquivo novo
+    Backup.registrar(b, null)
     await Bun.write(b, "novo")
 
     expect(Backup.tamanho()).toBe(marca + 2)

@@ -52,7 +52,6 @@ async function salvarCache(raiz: string, md: string): Promise<void> {
   await Bun.write(destino, md)
 }
 
-/** Automático no boot: sintetiza uma vez por projeto, em background, sem travar nada. */
 export async function garantirSintese(): Promise<void> {
   const raiz = process.cwd()
   if (await temSintese(raiz)) return
@@ -64,7 +63,6 @@ export async function garantirSintese(): Promise<void> {
   } catch {}
 }
 
-/** Comando /init: força a síntese e materializa o ARARA.md visível no projeto. */
 export async function inicializarProjeto(): Promise<void> {
   const raiz = process.cwd()
   ui.passo("Explorando e sintetizando o projeto...")

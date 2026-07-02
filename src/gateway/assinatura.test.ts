@@ -75,7 +75,7 @@ describe("assinaturaLinearValida", () => {
 
 describe("assinaturaDiscordValida (Ed25519)", () => {
   const { publicKey, privateKey } = generateKeyPairSync("ed25519")
-  // chave pública crua (32 bytes finais do DER SPKI) em hex — formato que o Discord fornece
+
   const publicHex = (publicKey.export({ format: "der", type: "spki" }) as Buffer).subarray(-32).toString("hex")
   const corpo = `{"type":1}`
   const ts = "1700000000"

@@ -71,7 +71,7 @@ async function resolverNode(dir: string): Promise<Omit<Subprojeto, "caminho">> {
     if (deps.typescript || (await existe(dir, "tsconfig.json"))) linguagens = ["TypeScript"]
     if (deps.next || deps.react) linguagens = linguagens.includes("TypeScript") ? ["TypeScript", "React"] : ["JavaScript", "React"]
   } catch {
-    // package.json ilegível: degrada pra defaults
+
   }
   const run = (s: string) => `${pm} run ${s}`
   const build = primeiroScript(scripts, SCRIPT_BUILD)
@@ -109,7 +109,6 @@ async function resolverMaven(dir: string): Promise<Omit<Subprojeto, "caminho">> 
   }
 }
 
-/** Alvos declarados num Makefile (`nome:`), ignorando atribuições `:=` e pattern rules (`%.o:`). Puro/testável. */
 export function alvosDeMakefile(conteudo: string): Set<string> {
   const alvos = new Set<string>()
   for (const linha of conteudo.split("\n")) {
@@ -119,7 +118,6 @@ export function alvosDeMakefile(conteudo: string): Set<string> {
   return alvos
 }
 
-/** C ou C++? Deriva dos arquivos reais do diretório — nada assumido. */
 async function linguagemC(dir: string): Promise<string[]> {
   try {
     const nomes = await readdir(dir)
@@ -199,8 +197,7 @@ const MANIFESTOS: Manifesto[] = [
     arquivo: "Package.swift", linguagens: ["Swift"], buildSystem: "swiftpm",
     resolver: estatico(["Swift"], "swiftpm", "swift build", "swift test", null),
   },
-  // C/C++ por último de propósito: Makefile costuma ser só task-runner em repo de outra stack —
-  // o manifesto real (package.json, Cargo.toml, go.mod...) tem que ganhar quando coexistem.
+
   { arquivo: "CMakeLists.txt", linguagens: ["C++"], buildSystem: "cmake", resolver: resolverCMake },
   { arquivo: "Makefile", linguagens: ["C"], buildSystem: "make", resolver: resolverMakefile },
 ]
@@ -221,7 +218,6 @@ async function temCsproj(dir: string): Promise<boolean> {
   }
 }
 
-/** Detecta o manifesto de UM diretório (sem descer). Retorna o subprojeto resolvido, ou null. */
 async function detectarDir(raiz: string, dir: string): Promise<Subprojeto | null> {
   for (const m of MANIFESTOS) {
     if (await existe(dir, m.arquivo)) {
@@ -244,7 +240,6 @@ async function detectarDir(raiz: string, dir: string): Promise<Subprojeto | null
 
 const MAX_SUBNIVEL = 2
 
-/** Descobre subprojetos descendo até `MAX_SUBNIVEL` níveis a partir da raiz (cada um com manifesto). */
 async function descobrirSubprojetos(raiz: string): Promise<Subprojeto[]> {
   const achados: Subprojeto[] = []
   const visitar = async (dir: string, nivel: number): Promise<void> => {
@@ -267,12 +262,6 @@ async function descobrirSubprojetos(raiz: string): Promise<Subprojeto[]> {
   return achados
 }
 
-/**
- * Detecta a stack do projeto (1.1). Olha o manifesto da raiz e, em monorepo, desce pra achar os
- * subprojetos (cada um com seu build system e comandos build/test/lint inferidos). Agnóstico de
- * linguagem. Se nada for reconhecido, marca `desconhecido: true` pro app perguntar ao usuário UMA
- * vez — esta função nunca pergunta, só sinaliza o gap.
- */
 export async function detectarStack(raiz: string): Promise<ProjectInfo> {
   const naRaiz = await detectarDir(raiz, raiz)
   const subprojetos = await descobrirSubprojetos(raiz)

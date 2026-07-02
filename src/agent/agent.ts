@@ -169,10 +169,45 @@ export function cancelar(): boolean {
 }
 
 function msgErro(e: unknown): string {
-  const any = e as { message?: string; statusCode?: number }
-  let m = any?.message ?? String(e)
-  if (any?.statusCode) m = `${m} (HTTP ${any.statusCode})`
+  const any = e as { message?: unknown; statusCode?: unknown }
+  let m = typeof any?.message === "string" && any.message ? any.message : String(e)
+  if (typeof any?.statusCode === "number" && any.statusCode > 0) m = `${m} (HTTP ${any.statusCode})`
   return m.length > 300 ? `${m.slice(0, 300)}…` : m
+}
+
+async function consumirStreamAoVivo(stream: AsyncIterable<string>, aoFalhar: (e: unknown) => void): Promise<string> {
+  const tty = Boolean(process.stdout.isTTY)
+  let resposta = ""
+  let comecou = false
+  try {
+    for await (const delta of stream) {
+      resposta += delta
+      if (!tty) continue
+      if (!comecou) {
+        ui.spinnerStop()
+        ui.linhaBranca()
+        comecou = true
+      }
+      ui.streamAppend(delta)
+    }
+  } catch (e) {
+    aoFalhar(e)
+  }
+  return resposta
+}
+
+async function extrairUso(usage: PromiseLike<unknown>): Promise<{ inTok: number; outTok: number }> {
+  try {
+    const u = (await usage) as {
+      inputTokens?: number
+      outputTokens?: number
+      promptTokens?: number
+      completionTokens?: number
+    }
+    return { inTok: u?.inputTokens ?? u?.promptTokens ?? 0, outTok: u?.outputTokens ?? u?.completionTokens ?? 0 }
+  } catch {
+    return { inTok: 0, outTok: 0 }
+  }
 }
 
 type Modelo = Parameters<typeof streamText>[0]["model"]
@@ -250,42 +285,15 @@ async function executarPassada(cfg: ConfigPassada): Promise<ResultadoPassada> {
     },
   })
 
-  const tty = Boolean(process.stdout.isTTY)
   ui.spinnerStart(thinking ? "Jade raciocinando" : "Jade pensando")
-  let resposta = ""
-  let comecou = false
-  try {
-    for await (const delta of result.textStream) {
-      resposta += delta
-      if (tty) {
-        if (!comecou) {
-          ui.spinnerStop()
-          ui.linhaBranca()
-          comecou = true
-        }
-        ui.streamAppend(delta)
-      }
-    }
-  } catch (e) {
+  const resposta = await consumirStreamAoVivo(result.textStream, (e) => {
     if (!ac.signal.aborted) erroCapturado = e
-  }
+  })
   ui.spinnerStop()
   const abortado = ac.signal.aborted
   _abort = null
 
-  let inTok = 0
-  let outTok = 0
-  try {
-    const u = (await result.usage) as {
-      inputTokens?: number
-      outputTokens?: number
-      promptTokens?: number
-      completionTokens?: number
-    }
-    inTok = u?.inputTokens ?? u?.promptTokens ?? 0
-    outTok = u?.outputTokens ?? u?.completionTokens ?? 0
-  } catch {}
-
+  const { inTok, outTok } = await extrairUso(result.usage)
   return { resposta, inTok, outTok, abortado, erro: erroCapturado }
 }
 
@@ -304,6 +312,40 @@ function fazerConcluirPasso(plano: Passo[], passoRef: { atual: number }) {
         : `Próximo passo (${passoRef.atual + 1}/${plano.length}): ${plano[passoRef.atual].texto}`
     },
   })
+}
+
+type ConsertoGate = {
+  gate: ResultadoGate
+  resposta: string
+  inTok: number
+  outTok: number
+  abortado: boolean
+  erro: unknown
+}
+
+async function rodarGateComConserto(
+  cfg: Omit<ConfigPassada, "thinking" | "extra">,
+  respostaAtual: string,
+): Promise<ConsertoGate> {
+  let gate = await rodarTestGate()
+  if (gate.estado !== "vermelho") {
+    return { gate, resposta: respostaAtual, inTok: 0, outTok: 0, abortado: false, erro: null }
+  }
+  ui.aviso("build vermelho após a edição — consertando antes de fechar.")
+  const r = await executarPassada({
+    ...cfg,
+    thinking: true,
+    extra: [
+      ...(respostaAtual.trim() ? [{ role: "assistant" as const, content: respostaAtual }] : []),
+      { role: "user" as const, content: INSTRUCAO_GATE_VERMELHO },
+    ],
+  })
+  const resposta = r.resposta.trim() ? r.resposta : respostaAtual
+  if (r.abortado || r.erro) {
+    return { gate, resposta, inTok: r.inTok, outTok: r.outTok, abortado: r.abortado, erro: r.erro }
+  }
+  gate = await rodarTestGate()
+  return { gate, resposta, inTok: r.inTok, outTok: r.outTok, abortado: false, erro: null }
 }
 
 function ultimaVerificouEFalhou(resposta: string): boolean {
@@ -650,33 +692,20 @@ async function consertarBuildAterrado(
     return true
   }
 
-  let gate = await rodarTestGate()
-
-  if (gate.estado === "vermelho") {
-    const rFix = await executarPassada({
-      model: openrouter(MODELOS.execucao) as Modelo,
-      sistema,
-      toolset: ferramentas,
-      plano: [],
-      thinking: true,
-      passoRef: { atual: 0 },
-      extra: [
-        ...(resposta.trim() ? [{ role: "assistant" as const, content: resposta }] : []),
-        { role: "user" as const, content: INSTRUCAO_GATE_VERMELHO },
-      ],
-    })
-    totalIn += rFix.inTok
-    totalOut += rFix.outTok
-    if (rFix.resposta.trim()) resposta = rFix.resposta
-    if (rFix.abortado) {
-      finalizarAbort()
-      return true
-    }
-    gate = await rodarTestGate()
+  const conserto = await rodarGateComConserto(
+    { model: openrouter(MODELOS.execucao) as Modelo, sistema, toolset: ferramentas, plano: [], passoRef: { atual: 0 } },
+    resposta,
+  )
+  totalIn += conserto.inTok
+  totalOut += conserto.outTok
+  resposta = conserto.resposta
+  if (conserto.abortado) {
+    finalizarAbort()
+    return true
   }
 
-  const gateFinal = mapaGateFinal(gate)
-  resposta += sufixoGate(gate)
+  const gateFinal = mapaGateFinal(conserto.gate)
+  resposta += sufixoGate(conserto.gate)
 
   const tty = Boolean(process.stdout.isTTY)
   if (resposta.trim()) {
@@ -787,28 +816,17 @@ async function orquestrarComplexo(
       return true
     }
 
-    let gate = await rodarTestGate()
-    if (gate.estado === "vermelho") {
-      const rFix = await executarPassada({
-        model: openrouter(MODELOS.execucao) as Modelo,
-        sistema,
-        toolset: ferramentas,
-        plano: [],
-        thinking: true,
-        passoRef,
-        extra: [
-          ...(r.resposta.trim() ? [{ role: "assistant" as const, content: r.resposta }] : []),
-          { role: "user" as const, content: INSTRUCAO_GATE_VERMELHO },
-        ],
-      })
-      tokensTotal += rFix.inTok + rFix.outTok
-      custoTotal += custoUSD(MODELOS.execucao, rFix.inTok, rFix.outTok)
-      if (rFix.abortado) {
-        finalizarAbort()
-        return true
-      }
-      gate = await rodarTestGate()
+    const conserto = await rodarGateComConserto(
+      { model: openrouter(MODELOS.execucao) as Modelo, sistema, toolset: ferramentas, plano: [], passoRef },
+      r.resposta,
+    )
+    tokensTotal += conserto.inTok + conserto.outTok
+    custoTotal += custoUSD(MODELOS.execucao, conserto.inTok, conserto.outTok)
+    if (conserto.abortado) {
+      finalizarAbort()
+      return true
     }
+    const gate = conserto.gate
 
     if (gate.estado === "ambiente") {
       feitos.push({ descricao: sub.descricao, estado: "sem-gate" })
@@ -830,6 +848,178 @@ async function orquestrarComplexo(
     feitos.length && feitos.every((f) => f.estado === "verde") ? "verde" : "sem-gate",
   )
   return true
+}
+
+type PrepDiagnostico =
+  | { fim: true }
+  | { fim: false; tarefa: string; diagTexto: string; modelos: string[]; tokens: number; custoUSD: number }
+
+async function faseDiagnostico(
+  input: string,
+  openrouter: ReturnType<typeof provedor>,
+  ctx: { completo: string },
+  blocoSkills: string,
+): Promise<PrepDiagnostico> {
+  const alvo = await ancorarAlvoDoRepo(input)
+  if (alvo) {
+    ui.subItem(`alvo apontado: ${alvo.arquivos.join(", ")}`)
+    logInterno(`alvo ancorado em [${alvo.arquivos.join(", ")}] por termos [${alvo.termos.join(", ")}]`)
+  }
+  const d = await diagnosticarEMastigar(input, openrouter, alvo)
+  if (d.ok) {
+    return { fim: false, tarefa: d.tarefa, diagTexto: d.texto, modelos: d.modelos, tokens: d.tokens, custoUSD: d.custoUSD }
+  }
+  if (d.motivo === "abortado") {
+    finalizarAbort()
+    return { fim: true }
+  }
+  if (d.motivo === "erro") {
+    ui.erro(msgErro(d.erro))
+    return { fim: true }
+  }
+  if (d.motivo === "foraDoAlvo" && alvo) {
+    const resposta = montarRespostaForaDoAlvo(alvo, d.foraDoAlvo, d.texto)
+    ui.linhaBranca()
+    ui.resposta(resposta)
+    ui.linhaBranca()
+    historico.push({ role: "user", content: input })
+    historico.push({ role: "assistant", content: resposta })
+    registrarDesfecho(resposta, "sem-gate")
+    ui.metricas(d.tokens, d.custoUSD, d.ms)
+    await registrarTarefa({
+      modo: "diagnostico",
+      modelo: d.modelos.join("→") || MODELOS.diagnostico,
+      thinking: true,
+      tokens: d.tokens,
+      custoUSD: d.custoUSD,
+      ms: d.ms,
+    })
+    return { fim: true }
+  }
+
+  const ttc = await tentarTestTimeCompute(input, openrouter, ctx, blocoSkills)
+  if (ttc.ok) {
+    const respostaTTC = `Cravei por verificação: gerei ${N_CANDIDATOS_TTC} hipóteses em paralelo e apliquei a que fechou o build.\n\n${ttc.texto}`
+    try {
+      await registrarBug(process.cwd(), montarRegistroBug(input, ttc.texto, arquivosEditados()))
+      logInterno("memoria: bug registrado (test-time-compute)")
+    } catch {}
+    ui.linhaBranca()
+    ui.resposta(respostaTTC)
+    ui.linhaBranca()
+    ui.metricas(d.tokens + ttc.tokens, d.custoUSD + ttc.custoUSD, d.ms)
+    await registrarTarefa({
+      modo: "diagnostico",
+      modelo: `${d.modelos.join("→") || MODELOS.diagnostico}+ttc`,
+      thinking: true,
+      tokens: d.tokens + ttc.tokens,
+      custoUSD: d.custoUSD + ttc.custoUSD,
+      ms: d.ms,
+    })
+    historico.push({ role: "user", content: input })
+    historico.push({ role: "assistant", content: respostaTTC })
+    registrarDesfecho(respostaTTC, "verde")
+    return { fim: true }
+  }
+
+  ui.aviso("não cravei a causa com confiança.")
+  ui.subItem("me aponta a direção (ex: 'olha no PaymentService') que eu vou direto.")
+  registrarDesfecho(
+    `${d.texto}\n\n[Jade] Não cravei a causa com confiança — não vou editar no escuro. Me aponta a direção (ex: 'olha no PaymentService') que eu vou direto.`,
+    "sem-gate",
+  )
+  ui.metricas(d.tokens + ttc.tokens, d.custoUSD + ttc.custoUSD, d.ms)
+  await registrarTarefa({
+    modo: "diagnostico",
+    modelo: d.modelos.join("→") || MODELOS.diagnostico,
+    thinking: true,
+    tokens: d.tokens + ttc.tokens,
+    custoUSD: d.custoUSD + ttc.custoUSD,
+    ms: d.ms,
+  })
+  return { fim: true }
+}
+
+async function prepararExecucaoGuiada(input: string): Promise<{ plano: Passo[]; tarefa: string }> {
+  let plano: Passo[] = []
+  if (pareceMultiPasso(input)) {
+    ui.spinnerStart("Planejando")
+    plano = await planejar(input)
+    ui.spinnerStop()
+    if (plano.length) ui.plano(plano.map((p) => p.texto))
+  }
+
+  const escopoInput = escopoDoDiagnostico(input)
+  definirEscopo(escopoInput)
+
+  let tarefa = input
+  if (escopoInput.livre && pareceBugDeSintoma(input)) {
+    const alvoExec = await ancorarAlvoDoRepo(input)
+    if (alvoExec) {
+      definirEscopo(escopoDeArquivos(alvoExec.arquivos))
+      tarefa = `${input}${notaAncoragem(alvoExec)}`
+      ui.subItem(`alvo apontado: ${alvoExec.arquivos.join(", ")}`)
+      logInterno(`alvo ancorado (execucao) em [${alvoExec.arquivos.join(", ")}] por termos [${alvoExec.termos.join(", ")}]`)
+    }
+  }
+  return { plano, tarefa }
+}
+
+async function fecharTarefa(f: {
+  input: string
+  inicio: number
+  modoFinal: Modo
+  gateFinal: GateFinal
+  resposta: string
+  diagTexto: string | null
+  modelosDiag: string[]
+  modeloAtual: string
+  tokens: number
+  custoUSD: number
+  houveThinking: boolean
+}): Promise<void> {
+  let resposta = f.resposta
+  if (f.gateFinal === "verde" && f.modoFinal === "diagnostico" && f.diagTexto) {
+    try {
+      await registrarBug(process.cwd(), montarRegistroBug(f.input, f.diagTexto, arquivosEditados()))
+      logInterno("memoria: bug registrado")
+    } catch (e) {
+      logInterno(`memoria: falha ao registrar bug (${msgErro(e)})`)
+    }
+  }
+
+  const candidatos = candidatosForaEscopo()
+  if (candidatos.length) {
+    resposta =
+      `${resposta}\n\n[Jade] Achei outros pontos com padrão parecido que NÃO toquei ` +
+      `(cada um pode ter semântica diferente): ${candidatos.join(", ")}. Quer que eu corrija algum desses também?`
+  }
+
+  const tty = Boolean(process.stdout.isTTY)
+  if (resposta.trim()) {
+    if (tty) ui.streamCommit()
+    else {
+      ui.linhaBranca()
+      ui.resposta(resposta)
+    }
+  }
+  ui.linhaBranca()
+
+  ui.metricas(f.tokens, f.custoUSD, Date.now() - f.inicio)
+  const modeloInterno =
+    f.modoFinal === "diagnostico"
+      ? `${f.modelosDiag.join("→") || MODELOS.diagnostico}→${f.modeloAtual}`
+      : f.modeloAtual
+  await registrarTarefa({
+    modo: f.modoFinal,
+    modelo: modeloInterno,
+    thinking: f.houveThinking,
+    tokens: f.tokens,
+    custoUSD: f.custoUSD,
+    ms: Date.now() - f.inicio,
+  })
+  historico.push({ role: "assistant", content: resposta })
+  registrarDesfecho(resposta, f.gateFinal)
 }
 
 export async function processar(input: string, imagens: ParteImagem[] = []) {
@@ -919,120 +1109,25 @@ export async function processar(input: string, imagens: ParteImagem[] = []) {
   let diagTexto: string | null = null
 
   if (modo === "diagnostico") {
-
-    const alvo = await ancorarAlvoDoRepo(input)
-    if (alvo) {
-      ui.subItem(`alvo apontado: ${alvo.arquivos.join(", ")}`)
-      logInterno(`alvo ancorado em [${alvo.arquivos.join(", ")}] por termos [${alvo.termos.join(", ")}]`)
-    }
-    const d = await diagnosticarEMastigar(input, openrouter, alvo)
-    if (!d.ok) {
-      if (d.motivo === "abortado") {
-        finalizarAbort()
-        return
-      }
-      if (d.motivo === "erro") {
-        ui.erro(msgErro(d.erro))
-        return
-      }
-      if (d.motivo === "foraDoAlvo" && alvo) {
-        const resposta = montarRespostaForaDoAlvo(alvo, d.foraDoAlvo, d.texto)
-        ui.linhaBranca()
-        ui.resposta(resposta)
-        ui.linhaBranca()
-        historico.push({ role: "user", content: input })
-        historico.push({ role: "assistant", content: resposta })
-        registrarDesfecho(resposta, "sem-gate")
-        ui.metricas(d.tokens, d.custoUSD, d.ms)
-        await registrarTarefa({
-          modo,
-          modelo: d.modelos.join("→") || MODELOS.diagnostico,
-          thinking: true,
-          tokens: d.tokens,
-          custoUSD: d.custoUSD,
-          ms: d.ms,
-        })
-        return
-      }
-
-      const ttc = await tentarTestTimeCompute(input, openrouter, ctx, blocoSkills)
-      if (ttc.ok) {
-        const respostaTTC = `Cravei por verificação: gerei ${N_CANDIDATOS_TTC} hipóteses em paralelo e apliquei a que fechou o build.\n\n${ttc.texto}`
-        try {
-          await registrarBug(process.cwd(), montarRegistroBug(input, ttc.texto, arquivosEditados()))
-          logInterno("memoria: bug registrado (test-time-compute)")
-        } catch {
-
-        }
-        ui.linhaBranca()
-        ui.resposta(respostaTTC)
-        ui.linhaBranca()
-        ui.metricas(d.tokens + ttc.tokens, d.custoUSD + ttc.custoUSD, d.ms)
-        await registrarTarefa({
-          modo,
-          modelo: `${d.modelos.join("→") || MODELOS.diagnostico}+ttc`,
-          thinking: true,
-          tokens: d.tokens + ttc.tokens,
-          custoUSD: d.custoUSD + ttc.custoUSD,
-          ms: d.ms,
-        })
-        historico.push({ role: "user", content: input })
-        historico.push({ role: "assistant", content: respostaTTC })
-        registrarDesfecho(respostaTTC, "verde")
-        return
-      }
-
-      ui.aviso("não cravei a causa com confiança.")
-      ui.subItem("me aponta a direção (ex: 'olha no PaymentService') que eu vou direto.")
-      registrarDesfecho(
-        `${d.texto}\n\n[Jade] Não cravei a causa com confiança — não vou editar no escuro. Me aponta a direção (ex: 'olha no PaymentService') que eu vou direto.`,
-        "sem-gate",
-      )
-      ui.metricas(d.tokens + ttc.tokens, d.custoUSD + ttc.custoUSD, d.ms)
-      await registrarTarefa({
-        modo,
-        modelo: d.modelos.join("→") || MODELOS.diagnostico,
-        thinking: true,
-        tokens: d.tokens + ttc.tokens,
-        custoUSD: d.custoUSD + ttc.custoUSD,
-        ms: d.ms,
-      })
-      return
-    }
-    tarefa = d.tarefa
-    diagTexto = d.texto
-    modelosDiag = d.modelos
-    tokensRaciocinio = d.tokens
-    custoRaciocinio = d.custoUSD
+    const prep = await faseDiagnostico(input, openrouter, ctx, blocoSkills)
+    if (prep.fim) return
+    tarefa = prep.tarefa
+    diagTexto = prep.diagTexto
+    modelosDiag = prep.modelos
+    tokensRaciocinio = prep.tokens
+    custoRaciocinio = prep.custoUSD
     modeloExec = MODELOS.execucao
     thinkingExec = false
-    registrarMastigado(d.tarefa)
+    registrarMastigado(prep.tarefa)
   } else if (heranca) {
-
     const anterior = mastigadoAnterior() as string
     tarefa = `${anterior}\n\nAjuste pedido pelo usuário agora: ${input}`
     definirEscopo(escopoDoDiagnostico(anterior))
     registrarMastigado(null)
   } else {
-    if (pareceMultiPasso(input)) {
-      ui.spinnerStart("Planejando")
-      plano = await planejar(input)
-      ui.spinnerStop()
-      if (plano.length) ui.plano(plano.map((p) => p.texto))
-    }
-
-    const escopoInput = escopoDoDiagnostico(input)
-    definirEscopo(escopoInput)
-
-    if (escopoInput.livre && pareceBugDeSintoma(input)) {
-      const alvoExec = await ancorarAlvoDoRepo(input)
-      if (alvoExec) {
-        definirEscopo(escopoDeArquivos(alvoExec.arquivos))
-        tarefa = `${input}${notaAncoragem(alvoExec)}`
-        ui.subItem(`alvo apontado: ${alvoExec.arquivos.join(", ")}`)
-        logInterno(`alvo ancorado (execucao) em [${alvoExec.arquivos.join(", ")}] por termos [${alvoExec.termos.join(", ")}]`)
-      }
-    }
+    const prep = await prepararExecucaoGuiada(input)
+    plano = prep.plano
+    tarefa = prep.tarefa
   }
 
   const passoRef = { atual: 0 }
@@ -1154,85 +1249,39 @@ export async function processar(input: string, imagens: ParteImagem[] = []) {
 
   let gateFinal: GateFinal = "sem-gate"
   if (precisaTestGate(houveEdicao())) {
-    let g = await rodarTestGate()
-
-    if (g.estado === "vermelho") {
-      ui.aviso("build vermelho após a edição — consertando antes de fechar.")
-      const rGate = await executarPassada({
-        model: openrouter(modeloAtual) as Modelo,
-        sistema,
-        toolset,
-        plano,
-        thinking: true,
-        passoRef,
-        extra: [
-          ...(respostaFinal.trim() ? [{ role: "assistant" as const, content: respostaFinal }] : []),
-          { role: "user" as const, content: INSTRUCAO_GATE_VERMELHO },
-        ],
-      })
-      totalIn += rGate.inTok
-      totalOut += rGate.outTok
-      if (rGate.resposta.trim()) respostaFinal = rGate.resposta
-      if (rGate.abortado) {
-        finalizarAbort()
-        return
-      }
-      if (rGate.erro) {
-        ui.erro(msgErro(rGate.erro))
-        historico.pop()
-        return
-      }
-      g = await rodarTestGate()
+    const conserto = await rodarGateComConserto(
+      { model: openrouter(modeloAtual) as Modelo, sistema, toolset, plano, passoRef },
+      respostaFinal,
+    )
+    totalIn += conserto.inTok
+    totalOut += conserto.outTok
+    respostaFinal = conserto.resposta
+    if (conserto.abortado) {
+      finalizarAbort()
+      return
     }
-    gateFinal = mapaGateFinal(g)
-    respostaFinal += sufixoGate(g)
-  }
-
-  if (gateFinal === "verde" && modoFinal === "diagnostico" && diagTexto) {
-    try {
-      await registrarBug(process.cwd(), montarRegistroBug(input, diagTexto, arquivosEditados()))
-      logInterno("memoria: bug registrado")
-    } catch (e) {
-      logInterno(`memoria: falha ao registrar bug (${msgErro(e)})`)
+    if (conserto.erro) {
+      ui.erro(msgErro(conserto.erro))
+      historico.pop()
+      return
     }
+    gateFinal = mapaGateFinal(conserto.gate)
+    respostaFinal += sufixoGate(conserto.gate)
   }
 
-  const candidatos = candidatosForaEscopo()
-  if (candidatos.length) {
-    respostaFinal =
-      `${respostaFinal}\n\n[Jade] Achei outros pontos com padrão parecido que NÃO toquei ` +
-      `(cada um pode ter semântica diferente): ${candidatos.join(", ")}. Quer que eu corrija algum desses também?`
-  }
-
-  const tty = Boolean(process.stdout.isTTY)
-  if (respostaFinal.trim()) {
-    if (tty) ui.streamCommit()
-    else {
-      ui.linhaBranca()
-      ui.resposta(respostaFinal)
-    }
-  }
-  ui.linhaBranca()
-
-  const custo = custoUSD(modeloAtual, totalIn, totalOut) + custoRaciocinio
-  const tokens = totalIn + totalOut + tokensRaciocinio
-  const houveThinking = thinkingExec || esforco.thinking || modoFinal === "diagnostico"
-
-  ui.metricas(tokens, custo, Date.now() - inicio)
-  const modeloInterno =
-    modoFinal === "diagnostico"
-      ? `${modelosDiag.join("→") || MODELOS.diagnostico}→${modeloAtual}`
-      : modeloAtual
-  await registrarTarefa({
-    modo: modoFinal,
-    modelo: modeloInterno,
-    thinking: houveThinking,
-    tokens,
-    custoUSD: custo,
-    ms: Date.now() - inicio,
+  await fecharTarefa({
+    input,
+    inicio,
+    modoFinal,
+    gateFinal,
+    resposta: respostaFinal,
+    diagTexto,
+    modelosDiag,
+    modeloAtual,
+    tokens: totalIn + totalOut + tokensRaciocinio,
+    custoUSD: custoUSD(modeloAtual, totalIn, totalOut) + custoRaciocinio,
+    houveThinking: thinkingExec || esforco.thinking || modoFinal === "diagnostico",
   })
-  historico.push({ role: "assistant", content: respostaFinal })
-  registrarDesfecho(respostaFinal, gateFinal)
 }
 
 async function processarConversa(input: string, ctx: { resumo: string }, modeloCloud: string) {
@@ -1279,23 +1328,9 @@ async function processarConversa(input: string, ctx: { resumo: string }, modeloC
 
   const tty = Boolean(process.stdout.isTTY)
   ui.spinnerStart("Jade pensando")
-  let resposta = ""
-  let comecou = false
-  try {
-    for await (const delta of result.textStream) {
-      resposta += delta
-      if (tty) {
-        if (!comecou) {
-          ui.spinnerStop()
-          ui.linhaBranca()
-          comecou = true
-        }
-        ui.streamAppend(delta)
-      }
-    }
-  } catch (e) {
+  const resposta = await consumirStreamAoVivo(result.textStream, (e) => {
     if (!ac.signal.aborted) erroCapturado = e
-  }
+  })
   ui.spinnerStop()
   const abortado = ac.signal.aborted
   _abort = null
@@ -1318,13 +1353,7 @@ async function processarConversa(input: string, ctx: { resumo: string }, modeloC
     }
   }
   ui.linhaBranca()
-  let inTok = 0
-  let outTok = 0
-  try {
-    const u = (await result.usage) as { inputTokens?: number; outputTokens?: number; promptTokens?: number; completionTokens?: number }
-    inTok = u?.inputTokens ?? u?.promptTokens ?? 0
-    outTok = u?.outputTokens ?? u?.completionTokens ?? 0
-  } catch {}
+  const { inTok, outTok } = await extrairUso(result.usage)
   const custo = local ? 0 : custoUSD(modeloCloud, inTok, outTok)
   ui.metricas(inTok + outTok, custo, Date.now() - inicio)
   await registrarTarefa({ modo: "conversa", modelo: modeloNome, thinking: false, tokens: inTok + outTok, custoUSD: custo, ms: Date.now() - inicio })
@@ -1369,23 +1398,9 @@ async function streamLeitura(
   })
 
   const tty = Boolean(process.stdout.isTTY)
-  let resposta = ""
-  let comecou = false
-  try {
-    for await (const delta of result.textStream) {
-      resposta += delta
-      if (tty) {
-        if (!comecou) {
-          ui.spinnerStop()
-          ui.linhaBranca()
-          comecou = true
-        }
-        ui.streamAppend(delta)
-      }
-    }
-  } catch (e) {
+  const resposta = await consumirStreamAoVivo(result.textStream, (e) => {
     if (!ac.signal.aborted) erroCapturado = e
-  }
+  })
   ui.spinnerStop()
   const abortado = ac.signal.aborted
   _abort = null
@@ -1407,13 +1422,7 @@ async function streamLeitura(
     }
   }
   ui.linhaBranca()
-  let inTok = 0
-  let outTok = 0
-  try {
-    const u = (await result.usage) as { inputTokens?: number; outputTokens?: number; promptTokens?: number; completionTokens?: number }
-    inTok = u?.inputTokens ?? u?.promptTokens ?? 0
-    outTok = u?.outputTokens ?? u?.completionTokens ?? 0
-  } catch {}
+  const { inTok, outTok } = await extrairUso(result.usage)
   const custo = custoUSD(modeloCloud, inTok, outTok)
   ui.metricas(inTok + outTok, custo, Date.now() - inicio)
   await registrarTarefa({ modo, modelo: modeloCloud, thinking, tokens: inTok + outTok, custoUSD: custo, ms: Date.now() - inicio })

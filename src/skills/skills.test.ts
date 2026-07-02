@@ -121,6 +121,32 @@ describe("skills — seleção determinística (Marques)", () => {
     const sel = await selecionarSkills("usa a skill changelog agora", raiz)
     expect(sel.map((s) => s.nome)).toContain("changelog")
   })
+
+  test("REGRESSÃO: 'faça os testes passarem' (Kotlin) NÃO ativa web3-testing por 'testing'", async () => {
+    const { raiz } = await cenario()
+    await criarSkill(
+      raiz,
+      ".claude/skills",
+      "web3-testing",
+      "name: web3-testing\ndescription: Testing smart contracts and Solidity on web3 blockchain",
+      "corpo web3",
+    )
+    const sel = await selecionarSkills("Os testes do projeto não passam. Faça todos os testes compilarem e passarem.", raiz)
+    expect(sel.map((s) => s.nome)).not.toContain("web3-testing")
+  })
+
+  test("um web3 de verdade (nome inteiro citado) ainda ativa", async () => {
+    const { raiz } = await cenario()
+    await criarSkill(
+      raiz,
+      ".claude/skills",
+      "web3-testing",
+      "name: web3-testing\ndescription: Testing smart contracts and Solidity on web3 blockchain",
+      "corpo web3",
+    )
+    const sel = await selecionarSkills("preciso de web3 testing pro meu smart contract em solidity", raiz)
+    expect(sel.map((s) => s.nome)).toContain("web3-testing")
+  })
 })
 
 describe("skills — bloco pro prompt", () => {

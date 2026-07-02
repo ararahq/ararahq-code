@@ -48,6 +48,16 @@ export function expandirTermosLingua(termos: Map<string, number>): Map<string, n
 
 // Casou >= MIN_SCORE termos distintos com a tarefa pra ativar (evita falso positivo de termo solto).
 const MIN_SCORE = 2
+
+// Termos genéricos demais pra ATIVAR uma skill sozinhos: descrevem quase toda tarefa de código. São
+// recurso linguístico (classe de stopword de ativação), não tabela de domínio. Casam e pontuam, mas
+// uma skill precisa de pelo menos UM termo ESPECÍFICO em comum — senão "faça os testes passarem"
+// (Kotlin) ativa "web3-testing" só porque compartilham a palavra "testing". Pós-ponte PT→EN.
+const TERMOS_GENERICOS = new Set([
+  "test", "tests", "testing", "code", "coding", "data", "app", "application", "file", "files",
+  "project", "build", "run", "fix", "error", "errors", "function", "method", "class", "feature",
+  "bug", "task", "type", "value", "service",
+])
 // Quantas skills no máximo entram num prompt (protege o orçamento de tokens — não despeja a pasta toda).
 const MAX_SKILLS = 2
 // Teto do corpo injetado por skill (sanitizado). Skill gigante não estoura o contexto.
@@ -161,30 +171,44 @@ export async function descobrirSkills(raiz: string): Promise<Skill[]> {
   return skills
 }
 
-/** Pontua uma skill contra os termos da tarefa: termos distintos em comum + boost se o NOME aparece. */
-function pontuar(termosTarefa: Map<string, number>, skill: Skill): number {
-  let score = 0
-  for (const t of termosTarefa.keys()) if (skill.termos.has(t)) score++
-  // Nome citado explicitamente na tarefa é sinal forte (ex.: "usa a skill pdf-fill").
-  for (const tok of skill.nome.toLowerCase().split(/[^a-z0-9]+/)) {
-    if (tok.length >= 3 && termosTarefa.has(tok)) score += 2
+export type Evidencia = { score: number; especificos: number; ativa: boolean }
+
+/**
+ * Evidência de que uma skill casa com a tarefa. Distingue termos ESPECÍFICOS (sinal real) de
+ * GENÉRICOS (ruído de qualquer tarefa de código). O boost de nome (+2) só vale pra token de nome
+ * ESPECÍFICO citado — um token genérico como "testing" no nome "web3-testing" NÃO dá boost (era a
+ * causa do falso-positivo). Ativa quando há >=1 termo específico em comum E o score cruza MIN_SCORE:
+ * um "pdf" (específico, ainda que solto, batendo o nome) ativa; "testing" (genérico) sozinho não.
+ * Puro, testável.
+ */
+export function avaliar(termosTarefa: Map<string, number>, skill: Skill): Evidencia {
+  let especificos = 0
+  let genericos = 0
+  for (const t of termosTarefa.keys()) {
+    if (!skill.termos.has(t)) continue
+    if (TERMOS_GENERICOS.has(t)) genericos++
+    else especificos++
   }
-  return score
+  const tokensNome = skill.nome.toLowerCase().split(/[^a-z0-9]+/).filter((t) => t.length >= 3)
+  const nomeEspecificoCitado = tokensNome.some((tok) => !TERMOS_GENERICOS.has(tok) && termosTarefa.has(tok))
+  const score = especificos + genericos + (nomeEspecificoCitado ? 2 : 0)
+  const ativa = especificos >= 1 && score >= MIN_SCORE
+  return { score, especificos, ativa }
 }
 
 /**
  * Seleciona, de forma DETERMINÍSTICA (Marques, zero modelo), as skills que casam com a tarefa. Casa
  * só contra os metadados (nome+descrição) — progressive disclosure. Retorna as MAX_SKILLS de maior
- * score acima do limiar, desempate estável por score e nome.
+ * score entre as que ativaram, desempate estável por score e nome.
  */
 export async function selecionarSkills(input: string, raiz: string): Promise<Skill[]> {
   const skills = await descobrirSkills(raiz)
   if (!skills.length) return []
   const termos = expandirTermosLingua(perfilTermos(input)) // ponte PT→EN: skills são em inglês
   return skills
-    .map((s) => ({ s, score: pontuar(termos, s) }))
-    .filter((x) => x.score >= MIN_SCORE)
-    .sort((a, b) => b.score - a.score || a.s.nome.localeCompare(b.s.nome))
+    .map((s) => ({ s, ev: avaliar(termos, s) }))
+    .filter((x) => x.ev.ativa)
+    .sort((a, b) => b.ev.score - a.ev.score || a.s.nome.localeCompare(b.s.nome))
     .slice(0, MAX_SKILLS)
     .map((x) => x.s)
 }

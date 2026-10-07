@@ -9,6 +9,7 @@ import { pathSeguro, sanitizar } from "../security/sanitize"
 import { Backup } from "./backup"
 import { registrarFalha, resetRecovery, TETO_RECOVERY } from "../agent/recovery"
 import { resetBaseline } from "../agent/baseline"
+import { fronteiraAtiva } from "../agent/fronteira"
 import {
   resetCamada4,
   escopoAtual,
@@ -238,7 +239,7 @@ export const ferramentas = {
       const f = pathSeguro(caminho)
       if (!f) return `caminho fora do projeto ou bloqueado: ${caminho}`
       if (_lidos.has(caminho)) return `Você já leu ${caminho} nesta tarefa. Use o conteúdo que já tem; não releia.`
-      if (_leituras >= MAX_LEITURAS)
+      if (_leituras >= MAX_LEITURAS && !fronteiraAtiva())
         return `Limite de leituras desta tarefa atingido. PARE de explorar e responda com diagnóstico (arquivo:linha) e conserto, usando o que já leu.`
       if (!(await Bun.file(f).exists())) return `arquivo não encontrado: ${caminho}`
       _lidos.add(caminho)
@@ -286,7 +287,7 @@ export const ferramentas = {
     execute: async ({ query }) => {
       const chave = `buscar:${query}`
       if (_rodada.has(chave)) return "Você já buscou isso nesta tarefa. Use o resultado anterior."
-      if (_buscas >= MAX_BUSCAS)
+      if (_buscas >= MAX_BUSCAS && !fronteiraAtiva())
         return `Limite de buscas desta tarefa atingido. PARE de buscar; leia o arquivo de serviço/entidade mais provável e responda com o que já tem.`
       _rodada.add(chave)
       _buscas++
@@ -340,6 +341,36 @@ export const ferramentas = {
       await Bun.write(f, novoConteudo)
       registrarEdicao(caminho, ancora ?? "", novo)
       return `${existe ? "editado" : "criado"}: ${caminho} (${novoConteudo.split("\n").length} linhas)`
+    },
+  }),
+
+  criar_arquivo: tool({
+    description:
+      "Cria um arquivo NOVO com o conteúdo dado (do zero). Use ESTA ferramenta — não editar_arquivo — " +
+      "quando o arquivo ainda não existe. Cria as pastas do caminho se faltarem. " +
+      "Se o arquivo já existir, é recusado (aí use editar_arquivo pra alterar, sem reescrita cega).",
+    inputSchema: z.object({
+      caminho: z.string().describe("caminho do arquivo novo, relativo à raiz do projeto"),
+      conteudo: z.string().describe("conteúdo completo do arquivo"),
+      motivo: z.string().describe("por que criar este arquivo"),
+    }),
+    execute: async ({ caminho, conteudo, motivo }) => {
+      const f = pathSeguro(caminho)
+      if (!f) return `caminho fora do projeto ou bloqueado: ${caminho}`
+      const escopo = escopoAtual()
+      if (!dentroDoEscopo(escopo, caminho)) {
+        registrarCandidatoForaEscopo(caminho)
+        return avisoForaDoEscopo(escopo, caminho)
+      }
+      if (await Bun.file(f).exists())
+        return `arquivo já existe: ${caminho}. Use editar_arquivo pra alterar (sem reescrita cega).`
+      notificador().toolAcao("criar_arquivo", caminho)
+      notificador().motivo(motivo)
+      notificador().diff("", conteudo)
+      Backup.registrar(f, null)
+      await Bun.write(f, conteudo)
+      registrarEdicao(caminho, "", conteudo)
+      return `criado: ${caminho} (${conteudo.split("\n").length} linhas)`
     },
   }),
 

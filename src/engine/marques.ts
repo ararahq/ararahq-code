@@ -40,6 +40,8 @@ const VERBOS_ACAO = [
   "apaga", "leia", "mostra", "mostre", "explica", "explique", "analisa", "analise",
   "atualiza", "gera", "ajusta", "otimiza", "testa", "teste", "revisa", "documenta",
   "renomeia", "move", "instala", "configura",
+  "desenvolve", "desenvolver", "constrói", "constroi", "construir", "construa",
+  "faz um", "faz uma", "faça um", "faça uma", "fazer um", "fazer uma",
 ]
 
 export function classificar(input: string): Complexidade {
@@ -107,6 +109,18 @@ const SINAIS_EXECUCAO = [
   "remove a", "remover o", "remover a", "muda o nome", "altera a linha",
 ]
 
+// Intenção de CRIAR código novo. Distinto de execução genérica: criar do zero nunca é
+// diagnóstico (não dá pra diagnosticar código que ainda não existe). Verbos como "analisa"
+// aqui descrevem o que o código NOVO faz, não um pedido pra investigar código existente.
+// Espaço no fim ("gera ", "gere ") evita falsos positivos ("geral", "gerencia").
+const SINAIS_CRIACAO = [
+  "cria", "crie", "criar", "escreve ", "escreva", "escrever",
+  "gera ", "gerar", "gere ", "implementa", "implementar",
+  "desenvolve", "desenvolver", "constrói", "constroi", "construir", "construa",
+  "faz um", "faz uma", "faça um", "faça uma", "fazer um", "fazer uma",
+  "do zero", "from scratch", "novo arquivo", "nova função", "nova funcao", "novo script",
+]
+
 export function decidirModo(input: string, indice?: IndiceParaRef): Modo {
   if (ehConversa(input, indice)) return "conversa"
   const i = input.toLowerCase()
@@ -115,10 +129,16 @@ export function decidirModo(input: string, indice?: IndiceParaRef): Modo {
   if (SINAIS_PLANEJAR.some((s) => i.includes(s))) return "planejar"
 
   const temExecucao = SINAIS_EXECUCAO.some((s) => i.includes(s))
+  const temCriacao = SINAIS_CRIACAO.some((s) => i.includes(s))
 
-  if (SINAIS_COMPREENDER.some((s) => i.includes(s)) && !temExecucao) return "compreender"
+  if (SINAIS_COMPREENDER.some((s) => i.includes(s)) && !temExecucao && !temCriacao) return "compreender"
 
   const temDiagnostico = SINAIS_DIAGNOSTICO.some((s) => i.includes(s))
+
+  // Criar código novo nunca é diagnóstico. Se há intenção de criação e o pedido não referencia
+  // código já existente, é execução — mesmo com "analisa/análise" na frase (descreve o que o
+  // código NOVO vai fazer, não um pedido pra achar a causa raiz de algo que existe).
+  if (temCriacao && !pareceReferenciaCodigo(input, indice)) return "execucao"
 
   if (temExecucao && !temDiagnostico) return "execucao"
   if (temDiagnostico && !temExecucao) return "diagnostico"

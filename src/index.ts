@@ -21,7 +21,14 @@ for (let i = 0; i < argsCli.length; i++) {
     caminhosImagem.push(argsCli[++i])
     continue
   }
+  if (argsCli[i] === "--fronteira") continue // consumida abaixo; não é texto da tarefa
   restoArgs.push(argsCli[i])
+}
+// ⚠️ EXPERIMENTAL/LOCAL: --fronteira desliga os freios de inteligência (escopo, abstenção, tetos).
+if (argsCli.includes("--fronteira")) {
+  const { ativarFronteira } = await import("./agent/fronteira")
+  ativarFronteira()
+  console.error("⚠️  MODO FRONTEIRA ativo — freios de inteligência DESLIGADOS (escopo/abstenção/tetos). Segurança dura (rm-rf, sudo, force-push) segue ligada.")
 }
 const iTarefa = restoArgs.indexOf("--tarefa")
 if (iTarefa >= 0) {

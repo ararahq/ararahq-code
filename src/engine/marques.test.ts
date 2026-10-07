@@ -127,6 +127,24 @@ describe("copiloto — decidirModo compreender", () => {
   })
 })
 
+describe("decidirModo — criar do zero nunca é diagnóstico", () => {
+  test("criar código que 'analisa' algo é execução, não diagnóstico", () => {
+    expect(decidirModo("cria um script que analisa os logs e conta erros")).toBe("execucao")
+    expect(decidirModo("cria um analisador de CNPJ")).toBe("execucao")
+    expect(decidirModo("implementa uma função que faz análise de sentimento")).toBe("execucao")
+  })
+  test("verbos de criação sem código existente viram execução", () => {
+    expect(decidirModo("escreve um componente React de login do zero")).toBe("execucao")
+    expect(decidirModo("desenvolve um endpoint novo de webhook")).toBe("execucao")
+    expect(decidirModo("cria um arquivo utils.ts com uma função de soma")).toBe("execucao")
+  })
+  test("diagnóstico real (código existente / sintoma) continua diagnóstico", () => {
+    expect(decidirModo("por que o PoolService.kt está lento")).toBe("diagnostico")
+    expect(decidirModo("investiga e troca isso")).toBe("diagnostico")
+    expect(decidirModo("acha a causa do erro no checkout")).toBe("diagnostico")
+  })
+})
+
 describe("3.6 — detectarComposta", () => {
   test("diagnóstico + correção ligados por conector -> encadeada (M3 -> M5)", () => {
     const r = detectarComposta("diagnostica o problema de concorrência e cria a correção")

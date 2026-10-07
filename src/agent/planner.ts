@@ -31,9 +31,9 @@ export function ferramentasDaFase(fase: Fase): string[] {
     case "ler":
       return LER_TOOLS
     case "editar":
-      return [...LER_TOOLS, "editar_arquivo"]
+      return [...LER_TOOLS, "editar_arquivo", "criar_arquivo"]
     default:
-      return [...LER_TOOLS, "editar_arquivo", "rodar_comando"]
+      return [...LER_TOOLS, "editar_arquivo", "criar_arquivo", "rodar_comando"]
   }
 }
 

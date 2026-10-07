@@ -21,6 +21,7 @@ import { ancorarAlvo, notaAncoragem, pareceBugDeSintoma, diagnosticoAncoraNoAlvo
 import { listarFontes } from "../conhecimento/walk"
 import { registrarBaseline, baselineAtual, compararComBaseline, rotuloFalha } from "./baseline"
 import { anexarImagens, type ParteImagem } from "./imagem"
+import { fronteiraAtiva } from "./fronteira"
 import { extrairDepreciacoes, comandoWarnings, montarTarefaFamilia, rotuloFamilia, contarUsosRestantes, relatorioDepreciacoes, type ResultadoFamilia } from "./depreciacao"
 import { selecionarPorVerificacao } from "./testtime"
 import { montarMapaAmplo, superficieDeArquivos } from "./contexto"
@@ -64,6 +65,11 @@ type Msg = { role: "user" | "assistant"; content: string }
 const MAX_ITERACOES = 24
 const LIMITE_INVESTIGACAO = 8
 const LIMITE_HISTORICO = 20
+// Modo fronteira: tetos de passo muito mais altos (deixa o loop ir fundo sem abortar cedo).
+const MAX_ITERACOES_FRONTEIRA = 300
+function tetoIteracoes(): number {
+  return fronteiraAtiva() ? MAX_ITERACOES_FRONTEIRA : MAX_ITERACOES
+}
 
 const SYSTEM_BASE = `Você é o Jade Code, um agente de engenharia de software brasileiro. Você opera no projeto do desenvolvedor com ferramentas para ler, editar e executar código.
 
@@ -87,7 +93,7 @@ REGRAS PERMANENTES (os dois modos):
 - SEMPRE leia os arquivos antes de afirmar como funcionam ou de editar.
 - Ao citar um método ou classe, confirme que existe antes de usá-lo.
 - Se o usuário afirmar algo sobre o código, verifique antes de agir. Se estiver errado, diga com evidência — não obedeça cegamente.
-- Use editar_arquivo para mudanças, não apenas mostre código.
+- Para CRIAR um arquivo novo (do zero), use criar_arquivo (caminho + conteudo). Para ALTERAR um arquivo que já existe, use editar_arquivo. Nunca apenas mostre código na resposta — escreva no disco com a ferramenta.
 - Use rodar_comando para verificar (compilar, testar), não peça pro usuário fazer.
 - Quando um build/teste falhar, classifique: é erro de código (corrija) ou de ambiente (diagnostique e devolva ao usuário se não for contornável com segurança)?
 - Nunca fique em loop. Se travar após várias tentativas, pare e resuma o que descobriu e o que falta decidir.
@@ -247,7 +253,7 @@ async function executarPassada(cfg: ConfigPassada): Promise<ResultadoPassada> {
     system: sistema,
     messages: mensagens,
     tools: semFerramentas ? undefined : toolset,
-    stopWhen: stepCountIs(semFerramentas ? 1 : MAX_ITERACOES),
+    stopWhen: stepCountIs(semFerramentas ? 1 : tetoIteracoes()),
     temperature: 0.3,
     abortSignal: ac.signal,
     providerOptions: thinking ? { openrouter: { reasoning: { effort: "medium" } } } : undefined,
@@ -257,7 +263,7 @@ async function executarPassada(cfg: ConfigPassada): Promise<ResultadoPassada> {
 
       if (trajetoriaLonga(stepNumber, false)) {
         return {
-          activeTools: ["ler_arquivo", "editar_arquivo"] as (keyof typeof toolset)[],
+          activeTools: ["ler_arquivo", "editar_arquivo", "criar_arquivo"] as (keyof typeof toolset)[],
           system: `${sis}\n\n${INSTRUCAO_TRAJETORIA_LONGA}`,
         }
       }
@@ -273,9 +279,9 @@ async function executarPassada(cfg: ConfigPassada): Promise<ResultadoPassada> {
           system: `${sis}\n\nPLANO (siga na ordem, não pule passos):\n${checklist}\n\nVocê está no passo ${passoRef.atual + 1}/${plano.length}: ${p.texto}. Faça SOMENTE esse passo agora. Ao terminar, chame concluir_passo.`,
         }
       }
-      if (stepNumber >= LIMITE_INVESTIGACAO) {
+      if (stepNumber >= LIMITE_INVESTIGACAO && !fronteiraAtiva()) {
         return {
-          activeTools: ["ler_arquivo", "editar_arquivo"] as (keyof typeof toolset)[],
+          activeTools: ["ler_arquivo", "editar_arquivo", "criar_arquivo"] as (keyof typeof toolset)[],
           system: `${sis}\n\nVocê já investigou ${stepNumber} passos — chega. PARE de buscar e de abrir arquivo novo. Responda AGORA: causa raiz com arquivo:linha + o trecho, e o conserto. Se for corrigir, edite. Não explore mais.`,
         }
       }
@@ -1012,6 +1018,11 @@ async function faseDiagnostico(
     return { fim: true }
   }
   if (d.motivo === "foraDoAlvo" && alvo) {
+    // Modo fronteira: sem trava de "cravou fora do alvo" — segue com a causa achada.
+    if (fronteiraAtiva()) {
+      const tarefaFora = `MODO FRONTEIRA: a causa foi achada fora do alvo citado, mas aplique a correção mesmo assim.\n\n${d.texto}`
+      return { fim: false, tarefa: tarefaFora, diagTexto: d.texto, modelos: d.modelos, tokens: d.tokens, custoUSD: d.custoUSD }
+    }
     const resposta = montarRespostaForaDoAlvo(alvo, d.foraDoAlvo, d.texto)
     ui.linhaBranca()
     ui.resposta(resposta)
@@ -1054,6 +1065,13 @@ async function faseDiagnostico(
     historico.push({ role: "assistant", content: respostaTTC })
     registrarDesfecho(respostaTTC, "verde")
     return { fim: true }
+  }
+
+  // Modo fronteira: sem gate de abstenção — age mesmo sem cravar (o experimento: até onde vai no escuro).
+  if (fronteiraAtiva()) {
+    ui.aviso("modo fronteira: não cravei, mas vou agir mesmo assim.")
+    const tarefaEscura = `A causa PROVÁVEL (baixa confiança) está abaixo. MODO FRONTEIRA: aplique a melhor correção mesmo sem certeza, edite e rode o build.\n\n${d.texto}`
+    return { fim: false, tarefa: tarefaEscura, diagTexto: d.texto, modelos: d.modelos, tokens: d.tokens + ttc.tokens, custoUSD: d.custoUSD + ttc.custoUSD }
   }
 
   ui.aviso("não cravei a causa com confiança.")

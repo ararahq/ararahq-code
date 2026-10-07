@@ -7,6 +7,10 @@ import {
   deveReclassificarPraDiagnostico,
   MODELOS,
   CADEIA_DIAGNOSTICO,
+  PERFIS,
+  PERFIL_PADRAO,
+  perfilAtivo,
+  CUSTO,
 } from "./router"
 
 describe("3.6 — rotear com tarefa composta", () => {
@@ -80,5 +84,63 @@ describe("escalada e fallback (puras, regressão)", () => {
     expect(deveReclassificarPraDiagnostico("execucao", false, "não tenho certeza, talvez seja no service")).toBe(true)
     expect(deveReclassificarPraDiagnostico("execucao", true, "não tenho certeza")).toBe(false)
     expect(deveReclassificarPraDiagnostico("diagnostico", false, "talvez")).toBe(false)
+  })
+})
+
+describe("perfis de roteamento (JADE_PERFIL)", () => {
+  test("perfilAtivo cai no padrão sem env ou com valor inválido", () => {
+    expect(perfilAtivo({})).toBe(PERFIL_PADRAO)
+    expect(perfilAtivo({ JADE_PERFIL: "nao-existe" })).toBe(PERFIL_PADRAO)
+  })
+
+  test("perfilAtivo reconhece uncensored (case/space-insensitive)", () => {
+    expect(perfilAtivo({ JADE_PERFIL: "uncensored" })).toBe("uncensored")
+    expect(perfilAtivo({ JADE_PERFIL: "  UNCENSORED  " })).toBe("uncensored")
+  })
+
+  test("todo perfil declara as 4 marchas + cauda não-vazia", () => {
+    for (const [nome, p] of Object.entries(PERFIS)) {
+      for (const chave of ["execucao", "diagnostico", "loopLongo", "compreender"] as const) {
+        expect(p[chave], `${nome}.${chave}`).toBeTruthy()
+      }
+      expect(p.cauda.length, `${nome}.cauda`).toBeGreaterThan(0)
+    }
+  })
+
+  test("CUSTO cobre todo slug dos perfis pagos (local é grátis, não entra)", () => {
+    for (const [nome, p] of Object.entries(PERFIS)) {
+      if (p.provedor !== "openrouter") continue
+      for (const slug of [p.execucao, p.diagnostico, p.loopLongo, p.compreender, ...p.cauda]) {
+        expect(CUSTO[slug], `custo faltando pra ${nome}: ${slug}`).toBeDefined()
+      }
+    }
+  })
+
+  test("perfil local usa provedor ollama; perfis pagos usam openrouter", () => {
+    expect(PERFIS.local.provedor).toBe("ollama")
+    expect(PERFIS.padrao.provedor).toBe("openrouter")
+    expect(PERFIS.uncensored.provedor).toBe("openrouter")
+  })
+
+  test("MODELOS espelha o perfil default no boot (sem JADE_PERFIL no ambiente de teste)", () => {
+    expect(MODELOS.execucao).toBe(PERFIS[PERFIL_PADRAO].execucao)
+    expect(MODELOS.diagnostico).toBe(PERFIS[PERFIL_PADRAO].diagnostico)
+  })
+})
+
+// Invariante crítico: o Jade é agêntico, então TODO modelo de TODO perfil precisa expor
+// tool-calling no OpenRouter — senão o agente morre com "No endpoints found that support
+// tool use". Bate na API real, então roda só com JADE_TEST_LIVE=1 (fora da suíte offline).
+describe("invariante de tool-calling (live — JADE_TEST_LIVE=1)", () => {
+  test.skipIf(!process.env.JADE_TEST_LIVE)("todo slug de todo perfil suporta `tools`", async () => {
+    const resp = await fetch("https://openrouter.ai/api/v1/models")
+    const { data } = (await resp.json()) as { data: { id: string; supported_parameters?: string[] }[] }
+    const comTools = new Set(data.filter((m) => (m.supported_parameters ?? []).includes("tools")).map((m) => m.id))
+    for (const [nome, p] of Object.entries(PERFIS)) {
+      if (p.provedor !== "openrouter") continue // local é checado contra o Ollama, não a API
+      for (const slug of [p.execucao, p.diagnostico, p.loopLongo, p.compreender, ...p.cauda]) {
+        expect(comTools.has(slug), `${nome}: ${slug} não expõe tool-calling no OpenRouter`).toBe(true)
+      }
+    }
   })
 })

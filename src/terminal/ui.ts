@@ -1,4 +1,5 @@
 import { renderMarkdown } from "./markdown"
+import { perfilAtivo, PERFIL_PADRAO } from "../agent/router"
 
 const BRAND = [56, 209, 216]
 const BRAND_DEEP = [28, 153, 167]
@@ -47,7 +48,7 @@ const PRODUTO = await (async () => {
   }
 })()
 
-type Estilo = "mascote" | "brand" | "brandBold" | "text" | "dim"
+type Estilo = "mascote" | "brand" | "brandBold" | "text" | "dim" | "warn"
 type Cel = { texto: string; estilo: Estilo }
 
 function colir(s: string, e: Estilo): string {
@@ -56,6 +57,7 @@ function colir(s: string, e: Estilo): string {
     case "brand": return brand(s)
     case "brandBold": return brand(bold(s))
     case "dim": return dim(s)
+    case "warn": return warn(s)
     default: return txt(s)
   }
 }
@@ -190,6 +192,9 @@ export const ui = {
       { texto: "", estilo: "text" },
       { texto: `modelo Jade v${VERSAO} · roteamento`, estilo: "brand" },
       { texto: "uma inteligência, várias marchas", estilo: "dim" },
+      ...(perfilAtivo() === PERFIL_PADRAO
+        ? []
+        : [{ texto: `! perfil ${perfilAtivo()} · low-refusal`, estilo: "warn" } as Cel]),
       { texto: `${CONTA.email} · ${CONTA.org}`, estilo: "dim" },
       { texto: abreviar(process.cwd()), estilo: "dim" },
     ]

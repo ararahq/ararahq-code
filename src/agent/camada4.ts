@@ -1,6 +1,7 @@
 import type { ProjectInfo } from "../conhecimento/stack"
 import { extrairArquivosCitados } from "../engine/refcodigo"
 import { detectarContradicao, type Edicao } from "../engine/marques"
+import { fronteiraAtiva } from "./fronteira"
 
 function normalizarArquivo(bruto: string): string {
   return bruto.replace(/^\.\//, "").replace(/:\d+.*$/, "").trim()
@@ -29,6 +30,7 @@ function montarEscopo(lista: string[]): Escopo {
 }
 
 export function dentroDoEscopo(escopo: Escopo, caminho: string): boolean {
+  if (fronteiraAtiva()) return true // modo fronteira: sem trava de escopo
   if (escopo.livre) return true
   const alvo = normalizarArquivo(caminho)
   const base = alvo.split("/").pop() ?? alvo
@@ -261,6 +263,7 @@ export const LIMITE_TRAJETORIA = 16
 
 export function trajetoriaLonga(passos: number, verde: boolean): boolean {
   if (verde) return false
+  if (fronteiraAtiva()) return false // modo fronteira: sem alarme de trajetória longa
   return passos > LIMITE_TRAJETORIA
 }
 

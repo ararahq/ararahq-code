@@ -1,7 +1,14 @@
+import { fronteiraAtiva } from "./fronteira"
+
 export const TETO_RECOVERY = 6
 export const ERROS_CODIGO_PRA_ESCALAR = 3
 
 export const TETO_TROCAS_MARCHA = 3
+
+/** Modo fronteira: sem teto de tentativas (deixa o modelo martelar até onde for). */
+function estourouComTeto(tentativas: number): boolean {
+  return !fronteiraAtiva() && tentativas >= TETO_RECOVERY
+}
 
 const RE_AMBIENTE =
   /\b(command not found|not found|no such file|unsupported class file|java\.lang\.UnsupportedClassVersion|requires java|jdk|jvm|JAVA_HOME|invalid source release|gradle wrapper|could not (find|resolve|download)|connection refused|network|enoent|permission denied|cannot find module|module not found|unknown compiler option|sdk not found|no version of)\b/i
@@ -63,11 +70,12 @@ export function registrarFalha(saida: string): ResultadoRecovery {
     origem,
     tentativas: estado.tentativas,
     escalar: estado.escaladaPendente,
-    estourou: estado.tentativas >= TETO_RECOVERY,
+    estourou: estourouComTeto(estado.tentativas),
   }
 }
 
 export function podeTrocarMarcha(): boolean {
+  if (fronteiraAtiva()) return true
   return estado.trocasMarcha < TETO_TROCAS_MARCHA && estado.tentativas < TETO_RECOVERY
 }
 
@@ -85,7 +93,7 @@ export function escaladaPendente(): boolean {
 }
 
 export function estourouTeto(): boolean {
-  return estado.tentativas >= TETO_RECOVERY
+  return estourouComTeto(estado.tentativas)
 }
 
 export function consumirEscalada(): void {
